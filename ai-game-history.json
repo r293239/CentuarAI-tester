@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "created": "2024-01-01T00:00:00Z",
+    "lastUpdated": "2024-01-01T00:00:00Z",
+    "totalGames": 0,
+    "aiWins": 0,
+    "humanWins": 0,
+    "draws": 0
+  },
+  "learningData": {
+    "performanceHistory": [],
+    "openingStats": {},
+    "patternRecognition": {},
+    "winRate": 50,
+    "currentDifficulty": 4,
+    "adaptiveLearning": true
+  },
+  "games": [],
+  "aiStats": {
+    "gamesAsWhite": 0,
+    "gamesAsBlack": 0,
+    "winsAsWhite": 0,
+    "winsAsBlack": 0,
+    "averageGameLength": 0,
+    "favoriteOpenings": {},
+    "tacticalPatterns": {
+      "pins": 0,
+      "forks": 0,
+      "skewers": 0,
+      "discoveries": 0
+    }
+  },
+  "openingPerformance": {
+    "e2-e4": {
+      "games": 0,
+      "wins": 0,
+      "winRate": 0
+    },
+    "d2-d4": {
+      "games": 0,
+      "wins": 0,
+      "winRate": 0
+    },
+    "g1-f3": {
+      "games": 0,
+      "wins": 0,
+      "winRate": 0
+    },
+    "c2-c4": {
+      "games": 0,
+      "wins": 0,
+      "winRate": 0
+    }
+  },
+  "recentGames": [
+    {
+      "id": "example_game_1",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "players": {
+        "white": "Human",
+        "black": "AI"
+      },
+      "result": "1/2-1/2",
+      "moves": [
+        "e2-e4", "e7-e5", "g1-f3", "b8-c6", "f1-b5", "a7-a6",
+        "b5-a4", "g8-f6", "e1-g1", "f8-e7", "f1-e1", "b7-b5",
+        "a4-b3", "d7-d6", "c2-c3", "e8-g8"
+      ],
+      "opening": "Ruy Lopez",
+      "gameLength": 32,
+      "aiDifficulty": 4,
+      "endgameType": "middlegame_draw",
+      "keyMoments": [
+        {
+          "move": 8,
+          "type": "tactical_opportunity",
+          "description": "AI missed fork opportunity"
+        }
+      ]
+    }
+  ],
+  "learningProgress": {
+    "gamesAnalyzed": 0,
+    "patternsLearned": 0,
+    "openingBookEntries": 156,
+    "endgamePositionsStudied": 0,
+    "improvementAreas": [
+      "tactical_vision",
+      "endgame_technique",
+      "positional_understanding"
+    ]
+  },
+  "difficultyHistory": [
+    {
+      "timestamp": "2024-01-01T00:00:00Z",
+      "difficulty": 4,
+      "reason": "initial_setting"
+    }
+  ],
+  "syncLog": [
+    {
+      "timestamp": "2024-01-01T00:00:00Z",
+      "action": "file_created",
+      "status": "success"
+    }
+  ]
+}

@@ -334,22 +334,6 @@
             border-radius: 4px;
         }
 
-        .evaluation {
-            text-align: center;
-            margin: 10px 0;
-            padding: 12px;
-            background: linear-gradient(135deg, #e8f4fd 0%, #d4edda 100%);
-            border-radius: 8px;
-            font-weight: bold;
-            border: 2px solid #bee5eb;
-            position: relative;
-        }
-
-        .evaluation::before {
-            content: '⚖️';
-            margin-right: 8px;
-        }
-
         .ai-info {
             text-align: center;
             margin: 10px 0;
@@ -441,17 +425,6 @@
             100% { transform: rotate(360deg); }
         }
 
-        /* Piece animations */
-        .square {
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        .piece-moving {
-            z-index: 1000;
-            transform: scale(1.2);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
-        }
-
         /* Game over overlay */
         .game-over-overlay {
             position: fixed;
@@ -520,8 +493,6 @@
         
         <div class="sync-status" id="sync-status">Ready</div>
         
-        <div class="evaluation" id="evaluation">Position evaluation: 0.00</div>
-        
         <div id="status" class="status">White to move</div>
         <div id="thinking" class="thinking" style="display: none;">🤔 AI is calculating<span class="loading"></span></div>
         
@@ -531,7 +502,6 @@
             <button onclick="newGame()" title="Start a new game">🎯 New Game</button>
             <button onclick="undoMove()" id="undo-btn" title="Undo the last move">↶ Undo Move</button>
             <button onclick="switchSides()" id="switch-sides-btn" title="Switch sides with AI">🔄 Switch Sides</button>
-            <button onclick="toggleHints()" id="hints-btn" title="Toggle move hints">💡 Hints</button>
         </div>
         
         <div class="move-history">
@@ -561,18 +531,6 @@
     <script src="chess-game.js"></script>
 
     <script>
-        // Additional UI enhancement functions
-        let hintsEnabled = false;
-
-        function toggleHints() {
-            hintsEnabled = !hintsEnabled;
-            const hintsBtn = document.getElementById('hints-btn');
-            hintsBtn.textContent = hintsEnabled ? '💡 Hints: ON' : '💡 Hints: OFF';
-            hintsBtn.style.background = hintsEnabled ? 
-                'linear-gradient(135deg, #28a745 0%, #20c997 100%)' : 
-                'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-        }
-
         function showGameOverModal(title, message) {
             document.getElementById('game-over-title').textContent = title;
             document.getElementById('game-over-message').textContent = message;
@@ -602,17 +560,6 @@
             }
         }
 
-        // Add some Easter eggs
-        let clickCount = 0;
-        document.addEventListener('click', function() {
-            clickCount++;
-            if (clickCount === 50) {
-                console.log('🎉 Congratulations! You\'ve clicked 50 times! You\'re really into this game!');
-            } else if (clickCount === 100) {
-                console.log('🤯 100 clicks! You should probably take a break and play some chess instead! 😄');
-            }
-        });
-
         // Add keyboard shortcuts
         document.addEventListener('keydown', function(e) {
             if (e.ctrlKey || e.metaKey) {
@@ -624,10 +571,6 @@
                     case 'n':
                         e.preventDefault();
                         newGame();
-                        break;
-                    case 'h':
-                        e.preventDefault();
-                        toggleHints();
                         break;
                 }
             }
@@ -641,294 +584,11 @@
                 console.log('   • Adaptive AI that learns from your games');
                 console.log('   • Professional opening database');
                 console.log('   • Beautiful animations and effects');
-                console.log('   • Keyboard shortcuts (Ctrl+Z: Undo, Ctrl+N: New Game, Ctrl+H: Hints)');
+                console.log('   • Keyboard shortcuts (Ctrl+Z: Undo, Ctrl+N: New Game)');
                 console.log('   • Responsive design for mobile play');
                 console.log('🚀 Enjoy your games!');
             }, 1000);
         });
     </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chess Game with AI</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        .container {
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-            max-width: 700px;
-            width: 100%;
-        }
-
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 30px;
-        }
-
-        .game-info {
-            text-align: center;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: #f0f0f0;
-            border-radius: 10px;
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-        }
-
-        .info-section {
-            margin: 5px;
-        }
-
-        .game-mode {
-            text-align: center;
-            margin: 15px 0;
-        }
-
-        .game-mode label {
-            font-weight: bold;
-            margin-right: 10px;
-        }
-
-        .game-mode select {
-            padding: 5px;
-            font-size: 14px;
-            border-radius: 3px;
-            border: 1px solid #ccc;
-        }
-
-        #chessboard {
-            width: 480px;
-            height: 480px;
-            margin: 20px auto;
-            border: 2px solid #000;
-            position: relative;
-        }
-
-        .square {
-            width: 60px;
-            height: 60px;
-            float: left;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 36px;
-            cursor: pointer;
-            user-select: none;
-            transition: all 0.2s ease;
-        }
-
-        .light { background-color: #f0d9b5; }
-        .dark { background-color: #b58863; }
-        
-        .square:hover {
-            opacity: 0.8;
-        }
-        
-        .selected {
-            background-color: #87CEEB !important;
-            box-shadow: inset 0 0 10px rgba(0,0,255,0.5);
-        }
-        
-        .possible-move {
-            background-color: #90EE90 !important;
-            position: relative;
-        }
-
-        .possible-move::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            background-color: rgba(0, 128, 0, 0.6);
-            transform: translate(-50%, -50%);
-        }
-
-        .capture-move {
-            background-color: #4169E1 !important;
-            position: relative;
-        }
-
-        .capture-move::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            right: 2px;
-            bottom: 2px;
-            left: 2px;
-            border: 3px solid rgba(65, 105, 225, 0.8);
-            border-radius: 4px;
-        }
-
-        .last-move {
-            background-color: #FFE4B5 !important;
-        }
-
-        .in-check {
-            background-color: #FF6B6B !important;
-            animation: pulse 1s infinite;
-        }
-
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(255, 107, 107, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
-        }
-
-        .controls {
-            text-align: center;
-            margin: 20px 0;
-        }
-
-        button {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            margin: 5px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background-color 0.2s;
-        }
-
-        button:hover {
-            background: #5a6fd8;
-        }
-
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-
-        .status {
-            text-align: center;
-            font-size: 18px;
-            font-weight: bold;
-            margin: 15px 0;
-            padding: 10px;
-            border-radius: 5px;
-            background: #f9f9f9;
-        }
-
-        .thinking {
-            text-align: center;
-            color: #667eea;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-
-        .move-history {
-            max-height: 150px;
-            overflow-y: auto;
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            font-family: monospace;
-        }
-
-        .evaluation {
-            text-align: center;
-            margin: 10px 0;
-            padding: 10px;
-            background: #e8f4fd;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-
-        .ai-info {
-            text-align: center;
-            margin: 10px 0;
-            padding: 8px;
-            background: #f0f8ff;
-            border-radius: 5px;
-            font-size: 14px;
-            color: #333;
-        }
-
-        .sync-status {
-            text-align: center;
-            margin: 5px 0;
-            padding: 5px;
-            background: #e8f5e8;
-            border-radius: 3px;
-            font-size: 12px;
-            color: #2d5a2d;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>♔ Chess Game ♛</h1>
-        
-        <div class="game-info">
-            <div class="info-section">
-                <strong>Current Player:</strong> <span id="current-player">White</span>
-            </div>
-            <div class="info-section">
-                <strong>Game Mode:</strong> <span id="game-mode-display">vs AI</span>
-            </div>
-            <div class="info-section">
-                <strong>Move:</strong> <span id="move-counter">1</span>
-            </div>
-        </div>
-
-        <div class="game-mode">
-            <label for="gameMode">Game Mode:</label>
-            <select id="gameMode" onchange="changeGameMode()">
-                <option value="ai">Player vs AI</option>
-                <option value="player">Player vs Player</option>
-            </select>
-        </div>
-
-        <div class="ai-info" id="ai-info">
-            AI Games Played: <span id="games-played">0</span> | 
-            Win Rate: <span id="win-rate">50%</span>
-        </div>
-        
-        <div class="sync-status" id="sync-status">Ready</div>
-        
-        <div class="evaluation" id="evaluation">Position evaluation: 0.00</div>
-        
-        <div id="status" class="status">White to move</div>
-        <div id="thinking" class="thinking" style="display: none;">🤔 AI is calculating... </div>
-        
-        <div id="chessboard"></div>
-        
-        <div class="controls">
-            <button onclick="newGame()">New Game</button>
-            <button onclick="undoMove()" id="undo-btn">Undo Move</button>
-            <button onclick="switchSides()" id="switch-sides-btn">Switch Sides</button>
-        </div>
-        
-        <div class="move-history">
-            <strong>Move History:</strong>
-            <div id="move-list"></div>
-        </div>
-    </div>
-
-    <!-- Load the chess game logic -->
-    <script src="chess-ai-database.js"></script>
-    <script src="chess-game.js"></script>
 </body>
 </html>

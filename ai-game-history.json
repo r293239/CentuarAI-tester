@@ -1,108 +1,431 @@
-{
-  "metadata": {
-    "version": "1.0",
-    "created": "2024-01-01T00:00:00Z",
-    "lastUpdated": "2024-01-01T00:00:00Z",
-    "totalGames": 0,
-    "aiWins": 0,
-    "humanWins": 0,
-    "draws": 0
-  },
-  "learningData": {
-    "performanceHistory": [],
-    "openingStats": {},
-    "patternRecognition": {},
-    "winRate": 50,
-    "currentDifficulty": 4,
-    "adaptiveLearning": true
-  },
-  "games": [],
-  "aiStats": {
-    "gamesAsWhite": 0,
-    "gamesAsBlack": 0,
-    "winsAsWhite": 0,
-    "winsAsBlack": 0,
-    "averageGameLength": 0,
-    "favoriteOpenings": {},
-    "tacticalPatterns": {
-      "pins": 0,
-      "forks": 0,
-      "skewers": 0,
-      "discoveries": 0
+// chess-ai-database.js
+// Enhanced chess AI with learning capabilities and professional opening book
+
+class ChessAILearner {
+    constructor() {
+        this.performanceHistory = [];
+        this.openingBook = this.initializeOpeningBook();
+        this.positionEvaluations = new Map();
+        this.learningRate = 0.1;
+        this.difficulty = 4; // Default difficulty
+        this.adaptiveLearning = true;
+        this.endgameDatabase = this.initializeEndgameDatabase();
+        
+        console.log("🧠 Enhanced Chess AI initialized with professional opening book");
     }
-  },
-  "openingPerformance": {
-    "e2-e4": {
-      "games": 0,
-      "wins": 0,
-      "winRate": 0
-    },
-    "d2-d4": {
-      "games": 0,
-      "wins": 0,
-      "winRate": 0
-    },
-    "g1-f3": {
-      "games": 0,
-      "wins": 0,
-      "winRate": 0
-    },
-    "c2-c4": {
-      "games": 0,
-      "wins": 0,
-      "winRate": 0
+
+    initializeOpeningBook() {
+        return {
+            // King's Pawn Openings (1.e4)
+            'e2-e4': {
+                'e7-e5': {
+                    moves: ['g1-f3', 'f1-b5', 'd2-d3', 'f1-c4'],
+                    weights: [30, 25, 15, 30] // Italian Game gets highest weight
+                },
+                'c7-c5': { // Sicilian Defense
+                    moves: ['g1-f3', 'd2-d4', 'b1-c3', 'f2-f4'],
+                    weights: [50, 30, 15, 5]
+                },
+                'e7-e6': { // French Defense
+                    moves: ['d2-d4', 'g1-f3', 'b1-d2', 'f1-d3'],
+                    weights: [40, 30, 20, 10]
+                },
+                'c7-c6': { // Caro-Kann Defense
+                    moves: ['d2-d4', 'g1-f3', 'b1-d2', 'f1-d3'],
+                    weights: [35, 35, 20, 10]
+                },
+                'd7-d6': { // Pirc Defense
+                    moves: ['d2-d4', 'g1-f3', 'b1-c3', 'f1-e2'],
+                    weights: [40, 30, 20, 10]
+                },
+                'g8-f6': { // Alekhine's Defense
+                    moves: ['e4-e5', 'b1-c3', 'd2-d4', 'g1-f3'],
+                    weights: [45, 25, 20, 10]
+                },
+                'd7-d5': { // Scandinavian Defense
+                    moves: ['e4-d5', 'g1-f3', 'b1-c3'],
+                    weights: [70, 20, 10]
+                }
+            },
+
+            // Queen's Pawn Openings (1.d4)
+            'd2-d4': {
+                'd7-d5': {
+                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'f1-f4'],
+                    weights: [40, 30, 20, 10] // Queen's Gambit
+                },
+                'g8-f6': {
+                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'g2-g3'],
+                    weights: [35, 35, 20, 10] // Indian Defenses
+                },
+                'e7-e6': {
+                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'e2-e4'],
+                    weights: [35, 30, 20, 15]
+                },
+                'c7-c5': { // Benoni Defense
+                    moves: ['d4-d5', 'g1-f3', 'c2-c4', 'b1-c3'],
+                    weights: [35, 30, 20, 15]
+                },
+                'f7-f5': { // Dutch Defense
+                    moves: ['g1-f3', 'c2-c4', 'g2-g3', 'b1-c3'],
+                    weights: [35, 25, 25, 15]
+                }
+            },
+
+            // English Opening (1.c4)
+            'c2-c4': {
+                'e7-e5': {
+                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'd2-d3'],
+                    weights: [35, 30, 25, 10]
+                },
+                'g8-f6': {
+                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'd2-d4'],
+                    weights: [30, 30, 25, 15]
+                },
+                'c7-c5': { // Symmetrical English
+                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'e2-e4'],
+                    weights: [35, 30, 20, 15]
+                },
+                'd7-d5': {
+                    moves: ['c4-d5', 'g1-f3', 'b1-c3', 'd2-d4'],
+                    weights: [40, 30, 20, 10]
+                }
+            },
+
+            // Réti Opening (1.Nf3)
+            'g1-f3': {
+                'd7-d5': {
+                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
+                    weights: [35, 30, 20, 15]
+                },
+                'g8-f6': {
+                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
+                    weights: [30, 30, 25, 15]
+                },
+                'e7-e6': {
+                    moves: ['c2-c4', 'd2-d4', 'g2-g3', 'b1-c3'],
+                    weights: [35, 25, 25, 15]
+                },
+                'c7-c5': {
+                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
+                    weights: [35, 30, 20, 15]
+                }
+            },
+
+            // Second move responses
+            'g1-f3_b8-c6': { // After 1.e4 e5 2.Nf3 Nc6
+                moves: ['f1-b5', 'f1-c4', 'd2-d4', 'b1-c3'],
+                weights: [40, 35, 15, 10] // Ruy Lopez, Italian Game
+            },
+
+            'f1-b5_a7-a6': { // Ruy Lopez continuation
+                moves: ['b5-a4', 'b5-c4', 'b5-c6'],
+                weights: [60, 25, 15] // Main line Ruy Lopez
+            },
+
+            'f1-c4_f8-e7': { // Italian Game continuation
+                moves: ['d2-d3', 'e1-g1', 'b1-c3', 'c2-c3'],
+                weights: [35, 30, 20, 15]
+            },
+
+            'c2-c4_d7-d5': { // Queen's Gambit
+                moves: ['c4-d5', 'd2-d4', 'g1-f3', 'b1-c3'],
+                weights: [15, 45, 25, 15] // Declined is most common
+            }
+        };
     }
-  },
-  "recentGames": [
-    {
-      "id": "example_game_1",
-      "timestamp": "2024-01-01T00:00:00Z",
-      "players": {
-        "white": "Human",
-        "black": "AI"
-      },
-      "result": "1/2-1/2",
-      "moves": [
-        "e2-e4", "e7-e5", "g1-f3", "b8-c6", "f1-b5", "a7-a6",
-        "b5-a4", "g8-f6", "e1-g1", "f8-e7", "f1-e1", "b7-b5",
-        "a4-b3", "d7-d6", "c2-c3", "e8-g8"
-      ],
-      "opening": "Ruy Lopez",
-      "gameLength": 32,
-      "aiDifficulty": 4,
-      "endgameType": "middlegame_draw",
-      "keyMoments": [
-        {
-          "move": 8,
-          "type": "tactical_opportunity",
-          "description": "AI missed fork opportunity"
+
+    initializeEndgameDatabase() {
+        return {
+            kingPawn: {
+                'opposition': 'critical_squares_rule',
+                'pawn_promotion': 'king_and_pawn_vs_king',
+                'triangulation': 'tempo_gaining'
+            },
+            rookEndgames: {
+                'lucena_position': 'winning_technique',
+                'philidor_position': 'drawing_technique',
+                'rook_and_pawn': 'cut_off_technique'
+            },
+            queenEndgames: {
+                'queen_vs_pawn': 'stalemate_tricks',
+                'queen_vs_rook': 'back_rank_mate'
+            }
+        };
+    }
+
+    getOpeningRecommendation(moveHistory) {
+        if (moveHistory.length === 0) {
+            // First move recommendations
+            const firstMoves = ['e2-e4', 'd2-d4', 'g1-f3', 'c2-c4'];
+            const weights = [35, 35, 20, 10]; // Favor e4 and d4
+            return this.weightedRandomChoice(firstMoves, weights);
         }
-      ]
+
+        if (moveHistory.length === 1) {
+            const lastMove = moveHistory[0];
+            if (this.openingBook[lastMove]) {
+                const responses = Object.keys(this.openingBook[lastMove]);
+                return this.weightedRandomChoice(responses, responses.map(() => 1));
+            }
+        }
+
+        if (moveHistory.length >= 2) {
+            const whiteMove = moveHistory[moveHistory.length - 2];
+            const blackMove = moveHistory[moveHistory.length - 1];
+            
+            if (this.openingBook[whiteMove] && this.openingBook[whiteMove][blackMove]) {
+                const data = this.openingBook[whiteMove][blackMove];
+                return this.weightedRandomChoice(data.moves, data.weights);
+            }
+
+            // Check for specific continuations
+            const movePair = `${whiteMove}_${blackMove}`;
+            if (this.openingBook[movePair]) {
+                const data = this.openingBook[movePair];
+                return this.weightedRandomChoice(data.moves, data.weights);
+            }
+        }
+
+        return null; // No opening recommendation
     }
-  ],
-  "learningProgress": {
-    "gamesAnalyzed": 0,
-    "patternsLearned": 0,
-    "openingBookEntries": 156,
-    "endgamePositionsStudied": 0,
-    "improvementAreas": [
-      "tactical_vision",
-      "endgame_technique",
-      "positional_understanding"
-    ]
-  },
-  "difficultyHistory": [
-    {
-      "timestamp": "2024-01-01T00:00:00Z",
-      "difficulty": 4,
-      "reason": "initial_setting"
+
+    weightedRandomChoice(choices, weights) {
+        const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+        let random = Math.random() * totalWeight;
+        
+        for (let i = 0; i < choices.length; i++) {
+            random -= weights[i];
+            if (random <= 0) {
+                return choices[i];
+            }
+        }
+        return choices[0]; // Fallback
     }
-  ],
-  "syncLog": [
-    {
-      "timestamp": "2024-01-01T00:00:00Z",
-      "action": "file_created",
-      "status": "success"
+
+    learnFromGame(gameData) {
+        if (!this.adaptiveLearning) return;
+
+        this.performanceHistory.push({
+            timestamp: Date.now(),
+            result: gameData.result,
+            difficulty: this.difficulty,
+            playerColors: gameData.playerColors,
+            moves: gameData.moves,
+            gameLength: gameData.moves.length
+        });
+
+        // Adjust difficulty based on recent performance
+        this.adjustDifficultyBasedOnPerformance();
+
+        // Learn from opening choices
+        this.learnFromOpening(gameData.moves, gameData.result);
+
+        // Update position evaluations
+        this.updatePositionEvaluations(gameData);
+
+        console.log(`🎓 AI learned from game. New difficulty: ${this.difficulty}`);
     }
-  ]
+
+    adjustDifficultyBasedOnPerformance() {
+        const recentGames = this.performanceHistory.slice(-10); // Last 10 games
+        if (recentGames.length < 5) return;
+
+        const wins = recentGames.filter(game => game.result === 'win').length;
+        const winRate = wins / recentGames.length;
+
+        if (winRate > 0.7) {
+            this.difficulty = Math.min(6, this.difficulty + 1);
+        } else if (winRate < 0.3) {
+            this.difficulty = Math.max(2, this.difficulty - 1);
+        }
+
+        // Add some randomness to prevent predictability
+        if (Math.random() < 0.1) {
+            this.difficulty += Math.random() < 0.5 ? -1 : 1;
+            this.difficulty = Math.max(2, Math.min(6, this.difficulty));
+        }
+    }
+
+    learnFromOpening(moves, result) {
+        if (moves.length < 6) return; // Need at least 3 moves for each side
+
+        const opening = moves.slice(0, 6).join('_');
+        if (!this.positionEvaluations.has(opening)) {
+            this.positionEvaluations.set(opening, { games: 0, score: 0 });
+        }
+
+        const data = this.positionEvaluations.get(opening);
+        data.games++;
+        
+        if (result === 'win') {
+            data.score += 1;
+        } else if (result === 'draw') {
+            data.score += 0.5;
+        }
+        
+        // If this opening performs poorly, reduce its weight
+        if (data.games >= 5 && (data.score / data.games) < 0.3) {
+            this.adjustOpeningWeights(moves[0], moves[1], -0.1);
+        }
+    }
+
+    adjustOpeningWeights(firstMove, response, adjustment) {
+        if (this.openingBook[firstMove] && this.openingBook[firstMove][response]) {
+            const data = this.openingBook[firstMove][response];
+            for (let i = 0; i < data.weights.length; i++) {
+                data.weights[i] = Math.max(1, data.weights[i] + adjustment);
+            }
+        }
+    }
+
+    updatePositionEvaluations(gameData) {
+        // Simple position evaluation learning
+        const criticalMoves = this.identifyCriticalMoves(gameData.moves);
+        
+        criticalMoves.forEach(moveIndex => {
+            const position = gameData.moves.slice(0, moveIndex).join('_');
+            if (!this.positionEvaluations.has(position)) {
+                this.positionEvaluations.set(position, { games: 0, score: 0 });
+            }
+            
+            const data = this.positionEvaluations.get(position);
+            data.games++;
+            
+            if (gameData.result === 'win') {
+                data.score += 1;
+            } else if (gameData.result === 'draw') {
+                data.score += 0.5;
+            }
+        });
+    }
+
+    identifyCriticalMoves(moves) {
+        // Identify moves that are likely to be critical
+        // For now, just return middle game moves (moves 10-30)
+        const critical = [];
+        for (let i = 10; i < Math.min(30, moves.length); i += 2) {
+            critical.push(i);
+        }
+        return critical;
+    }
+
+    adjustDifficulty() {
+        // Return current difficulty with some variation
+        const variation = Math.floor(Math.random() * 3) - 1; // -1, 0, or 1
+        return Math.max(2, Math.min(6, this.difficulty + variation));
+    }
+
+    getWinRate() {
+        if (this.performanceHistory.length === 0) return 50;
+        
+        const wins = this.performanceHistory.filter(game => game.result === 'win').length;
+        const draws = this.performanceHistory.filter(game => game.result === 'draw').length;
+        
+        return Math.round(((wins + draws * 0.5) / this.performanceHistory.length) * 100);
+    }
+
+    getOpeningStatistics() {
+        const stats = {};
+        this.performanceHistory.forEach(game => {
+            if (game.moves.length >= 2) {
+                const opening = game.moves.slice(0, 2).join(' ');
+                if (!stats[opening]) {
+                    stats[opening] = { games: 0, wins: 0, draws: 0 };
+                }
+                stats[opening].games++;
+                if (game.result === 'win') stats[opening].wins++;
+                if (game.result === 'draw') stats[opening].draws++;
+            }
+        });
+        
+        return stats;
+    }
+
+    exportLearningData() {
+        return {
+            performanceHistory: this.performanceHistory,
+            difficulty: this.difficulty,
+            winRate: this.getWinRate(),
+            gamesPlayed: this.performanceHistory.length,
+            positionEvaluations: Array.from(this.positionEvaluations.entries()),
+            openingStats: this.getOpeningStatistics()
+        };
+    }
+
+    importLearningData(data) {
+        if (data.performanceHistory) {
+            this.performanceHistory = data.performanceHistory;
+        }
+        if (data.difficulty) {
+            this.difficulty = data.difficulty;
+        }
+        if (data.positionEvaluations) {
+            this.positionEvaluations = new Map(data.positionEvaluations);
+        }
+        
+        console.log(`🔄 Imported learning data: ${this.performanceHistory.length} games, difficulty ${this.difficulty}`);
+    }
+
+    // Advanced opening analysis
+    analyzeOpening(moves) {
+        if (moves.length < 6) return null;
+        
+        const openingMoves = moves.slice(0, 6);
+        const openingString = openingMoves.join(' ');
+        
+        // Classify the opening
+        if (openingString.includes('e2-e4 e7-e5 g1-f3')) {
+            if (openingString.includes('f1-b5')) return 'Ruy Lopez';
+            if (openingString.includes('f1-c4')) return 'Italian Game';
+            if (openingString.includes('d2-d4')) return 'Scotch Game';
+        }
+        
+        if (openingString.includes('d2-d4 d7-d5')) {
+            if (openingString.includes('c2-c4')) return 'Queen\'s Gambit';
+            if (openingString.includes('g1-f3')) return 'London System';
+        }
+        
+        if (openingString.includes('e2-e4 c7-c5')) return 'Sicilian Defense';
+        if (openingString.includes('e2-e4 e7-e6')) return 'French Defense';
+        if (openingString.includes('e2-e4 c7-c6')) return 'Caro-Kann Defense';
+        
+        return 'Unknown Opening';
+    }
+
+    // Suggest improvements based on game analysis
+    getImprovementSuggestions() {
+        if (this.performanceHistory.length < 10) {
+            return ['Play more games to get personalized suggestions'];
+        }
+        
+        const suggestions = [];
+        const recentGames = this.performanceHistory.slice(-20);
+        const avgGameLength = recentGames.reduce((sum, game) => sum + game.gameLength, 0) / recentGames.length;
+        
+        if (avgGameLength < 30) {
+            suggestions.push('Focus on improving opening preparation - games are ending too quickly');
+        }
+        
+        if (avgGameLength > 80) {
+            suggestions.push('Work on endgame technique - games are lasting very long');
+        }
+        
+        const winRate = this.getWinRate();
+        if (winRate < 40) {
+            suggestions.push('Consider studying basic tactics and positional principles');
+        } else if (winRate > 70) {
+            suggestions.push('You\'re playing very well! Try increasing the AI difficulty');
+        }
+        
+        return suggestions.length > 0 ? suggestions : ['Keep practicing and analyzing your games!'];
+    }
+
+    // Reset learning data
+    reset() {
+        this.performanceHistory = [];
+        this.positionEvaluations.clear();
+        this.difficulty = 4;
+        console.log('🔄 AI learning data reset');
+    }
 }

@@ -529,7 +529,7 @@
         <div class="game-mode">
             <label for="gameMode">Game Mode:</label>
             <select id="gameMode" onchange="changeGameMode()">
-                <option value="ai">Player vs Smart AI</option>
+                <option value="ai">Centaur AI</option>
                 <option value="player">Player vs Player</option>
             </select>
         </div>
@@ -566,22 +566,9 @@
         </div>
     </div>
 
-    <!-- Load the chess game logic -->
-    <script>
-        // First load the AI database
-        const aiScript = document.createElement('script');
-        aiScript.src = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(`
-            ${document.querySelector('[data-chess-ai]')?.textContent || '// AI database will be loaded here'}
-        `);
-        document.head.appendChild(aiScript);
-        
-        // Then load the main game logic
-        const gameScript = document.createElement('script');
-        gameScript.src = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(`
-            ${document.querySelector('[data-chess-game]')?.textContent || '// Game logic will be loaded here'}
-        `);
-        document.head.appendChild(gameScript);
-    </script>
+    <!-- Load JavaScript files -->
+    <script src="chess-ai-database.js"></script>
+    <script src="chess-game.js"></script>
 
     <script>
         // Enhanced status updates with animations
@@ -722,32 +709,17 @@
         }
         
         setInterval(trackPerformance, 60000); // Check every minute
-    </script>
 
-    <!-- Inline the JavaScript files for better loading -->
-    <script data-chess-ai>
-// chess-ai-database.js content will be loaded here
-// This ensures proper loading order and prevents CORS issues
-    </script>
-
-    <script data-chess-game>
-// chess-game.js content will be loaded here  
-// This ensures the AI is loaded before the main game logic
-    </script>
-
-    <script>
-        // Load the actual JavaScript content
+        // Load game after DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
-            // This will be replaced with the actual file loading mechanism
             console.log('🎯 Chess game interface loaded successfully!');
             
             // Initialize game after a short delay to ensure all scripts are loaded
             setTimeout(() => {
                 if (typeof newGame === 'function') {
-                    // Auto-start first game
-                    console.log('🚀 Starting initial game setup...');
+                    console.log('🚀 Game functions loaded successfully!');
                 } else {
-                    console.log('⚠️  Game functions not loaded yet, please refresh if issues persist');
+                    console.log('⚠️ Game functions not loaded yet, please refresh if issues persist');
                 }
             }, 500);
         });

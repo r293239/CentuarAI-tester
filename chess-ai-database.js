@@ -16,121 +16,85 @@ class ChessAILearner {
 
     initializeOpeningBook() {
         return {
-            // King's Pawn Openings (1.e4)
-            'e2-e4': {
-                'e7-e5': {
-                    moves: ['g1-f3', 'f1-b5', 'd2-d3', 'f1-c4'],
-                    weights: [30, 25, 15, 30] // Italian Game gets highest weight
-                },
-                'c7-c5': { // Sicilian Defense
-                    moves: ['g1-f3', 'd2-d4', 'b1-c3', 'f2-f4'],
-                    weights: [50, 30, 15, 5]
-                },
-                'e7-e6': { // French Defense
-                    moves: ['d2-d4', 'g1-f3', 'b1-d2', 'f1-d3'],
-                    weights: [40, 30, 20, 10]
-                },
-                'c7-c6': { // Caro-Kann Defense
-                    moves: ['d2-d4', 'g1-f3', 'b1-d2', 'f1-d3'],
-                    weights: [35, 35, 20, 10]
-                },
-                'd7-d6': { // Pirc Defense
-                    moves: ['d2-d4', 'g1-f3', 'b1-c3', 'f1-e2'],
-                    weights: [40, 30, 20, 10]
-                },
-                'g8-f6': { // Alekhine's Defense
-                    moves: ['e4-e5', 'b1-c3', 'd2-d4', 'g1-f3'],
-                    weights: [45, 25, 20, 10]
-                },
-                'd7-d5': { // Scandinavian Defense
-                    moves: ['e4-d5', 'g1-f3', 'b1-c3'],
-                    weights: [70, 20, 10]
-                }
-            },
-
-            // Queen's Pawn Openings (1.d4)
-            'd2-d4': {
-                'd7-d5': {
-                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'f1-f4'],
-                    weights: [40, 30, 20, 10] // Queen's Gambit
-                },
-                'g8-f6': {
-                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'g2-g3'],
-                    weights: [35, 35, 20, 10] // Indian Defenses
-                },
-                'e7-e6': {
-                    moves: ['c2-c4', 'g1-f3', 'b1-c3', 'e2-e4'],
-                    weights: [35, 30, 20, 15]
-                },
-                'c7-c5': { // Benoni Defense
-                    moves: ['d4-d5', 'g1-f3', 'c2-c4', 'b1-c3'],
-                    weights: [35, 30, 20, 15]
-                },
-                'f7-f5': { // Dutch Defense
-                    moves: ['g1-f3', 'c2-c4', 'g2-g3', 'b1-c3'],
-                    weights: [35, 25, 25, 15]
-                }
-            },
-
-            // English Opening (1.c4)
-            'c2-c4': {
-                'e7-e5': {
-                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'd2-d3'],
+            // Opening responses based on algebraic notation (from-to format without dashes)
+            'e2e4': {
+                'e7e5': {
+                    moves: ['g1f3', 'f1c4', 'f1b5', 'd2d3'],
                     weights: [35, 30, 25, 10]
                 },
-                'g8-f6': {
-                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'd2-d4'],
-                    weights: [30, 30, 25, 15]
+                'c7c5': { // Sicilian Defense
+                    moves: ['g1f3', 'd2d4', 'b1c3', 'f2f4'],
+                    weights: [50, 30, 15, 5]
                 },
-                'c7-c5': { // Symmetrical English
-                    moves: ['b1-c3', 'g1-f3', 'g2-g3', 'e2-e4'],
-                    weights: [35, 30, 20, 15]
-                },
-                'd7-d5': {
-                    moves: ['c4-d5', 'g1-f3', 'b1-c3', 'd2-d4'],
+                'e7e6': { // French Defense
+                    moves: ['d2d4', 'g1f3', 'b1d2', 'f1d3'],
                     weights: [40, 30, 20, 10]
+                },
+                'c7c6': { // Caro-Kann Defense
+                    moves: ['d2d4', 'g1f3', 'b1d2'],
+                    weights: [40, 35, 25]
+                },
+                'd7d6': { // Pirc Defense
+                    moves: ['d2d4', 'g1f3', 'b1c3'],
+                    weights: [40, 35, 25]
+                },
+                'g8f6': { // Alekhine's Defense
+                    moves: ['e4e5', 'b1c3', 'd2d4'],
+                    weights: [45, 30, 25]
+                },
+                'd7d5': { // Scandinavian Defense
+                    moves: ['e4d5', 'g1f3'],
+                    weights: [70, 30]
                 }
             },
 
-            // Réti Opening (1.Nf3)
-            'g1-f3': {
-                'd7-d5': {
-                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
-                    weights: [35, 30, 20, 15]
+            'd2d4': {
+                'd7d5': {
+                    moves: ['c2c4', 'g1f3', 'b1c3'],
+                    weights: [45, 30, 25]
                 },
-                'g8-f6': {
-                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
-                    weights: [30, 30, 25, 15]
+                'g8f6': {
+                    moves: ['c2c4', 'g1f3', 'b1c3'],
+                    weights: [40, 35, 25]
                 },
-                'e7-e6': {
-                    moves: ['c2-c4', 'd2-d4', 'g2-g3', 'b1-c3'],
-                    weights: [35, 25, 25, 15]
+                'e7e6': {
+                    moves: ['c2c4', 'g1f3', 'b1c3'],
+                    weights: [40, 30, 30]
                 },
-                'c7-c5': {
-                    moves: ['c2-c4', 'g2-g3', 'd2-d4', 'b1-c3'],
-                    weights: [35, 30, 20, 15]
+                'c7c5': {
+                    moves: ['d4d5', 'g1f3', 'c2c4'],
+                    weights: [40, 35, 25]
                 }
             },
 
-            // Second move responses
-            'g1-f3_b8-c6': { // After 1.e4 e5 2.Nf3 Nc6
-                moves: ['f1-b5', 'f1-c4', 'd2-d4', 'b1-c3'],
-                weights: [40, 35, 15, 10] // Ruy Lopez, Italian Game
+            'g1f3': {
+                'd7d5': {
+                    moves: ['c2c4', 'g2g3', 'd2d4'],
+                    weights: [40, 35, 25]
+                },
+                'g8f6': {
+                    moves: ['c2c4', 'g2g3', 'd2d4'],
+                    weights: [35, 35, 30]
+                },
+                'e7e6': {
+                    moves: ['c2c4', 'd2d4', 'g2g3'],
+                    weights: [40, 30, 30]
+                }
             },
 
-            'f1-b5_a7-a6': { // Ruy Lopez continuation
-                moves: ['b5-a4', 'b5-c4', 'b5-c6'],
-                weights: [60, 25, 15] // Main line Ruy Lopez
-            },
-
-            'f1-c4_f8-e7': { // Italian Game continuation
-                moves: ['d2-d3', 'e1-g1', 'b1-c3', 'c2-c3'],
-                weights: [35, 30, 20, 15]
-            },
-
-            'c2-c4_d7-d5': { // Queen's Gambit
-                moves: ['c4-d5', 'd2-d4', 'g1-f3', 'b1-c3'],
-                weights: [15, 45, 25, 15] // Declined is most common
+            'c2c4': {
+                'e7e5': {
+                    moves: ['b1c3', 'g1f3', 'g2g3'],
+                    weights: [40, 35, 25]
+                },
+                'g8f6': {
+                    moves: ['b1c3', 'g1f3', 'g2g3'],
+                    weights: [35, 40, 25]
+                },
+                'c7c5': {
+                    moves: ['b1c3', 'g1f3', 'g2g3'],
+                    weights: [40, 35, 25]
+                }
             }
         };
     }
@@ -157,8 +121,8 @@ class ChessAILearner {
     getOpeningRecommendation(moveHistory) {
         if (moveHistory.length === 0) {
             // First move recommendations
-            const firstMoves = ['e2-e4', 'd2-d4', 'g1-f3', 'c2-c4'];
-            const weights = [35, 35, 20, 10]; // Favor e4 and d4
+            const firstMoves = ['e2e4', 'd2d4', 'g1f3', 'c2c4'];
+            const weights = [35, 35, 20, 10];
             return this.weightedRandomChoice(firstMoves, weights);
         }
 
@@ -166,7 +130,8 @@ class ChessAILearner {
             const lastMove = moveHistory[0];
             if (this.openingBook[lastMove]) {
                 const responses = Object.keys(this.openingBook[lastMove]);
-                return this.weightedRandomChoice(responses, responses.map(() => 1));
+                const weights = responses.map(() => 1);
+                return this.weightedRandomChoice(responses, weights);
             }
         }
 
@@ -176,13 +141,6 @@ class ChessAILearner {
             
             if (this.openingBook[whiteMove] && this.openingBook[whiteMove][blackMove]) {
                 const data = this.openingBook[whiteMove][blackMove];
-                return this.weightedRandomChoice(data.moves, data.weights);
-            }
-
-            // Check for specific continuations
-            const movePair = `${whiteMove}_${blackMove}`;
-            if (this.openingBook[movePair]) {
-                const data = this.openingBook[movePair];
                 return this.weightedRandomChoice(data.moves, data.weights);
             }
         }
@@ -200,7 +158,7 @@ class ChessAILearner {
                 return choices[i];
             }
         }
-        return choices[0]; // Fallback
+        return choices[0];
     }
 
     learnFromGame(gameData) {
@@ -212,23 +170,18 @@ class ChessAILearner {
             difficulty: this.difficulty,
             playerColors: gameData.playerColors,
             moves: gameData.moves,
-            gameLength: gameData.moves.length
+            gameLength: gameData.moves ? gameData.moves.length : 0
         });
 
-        // Adjust difficulty based on recent performance
         this.adjustDifficultyBasedOnPerformance();
-
-        // Learn from opening choices
         this.learnFromOpening(gameData.moves, gameData.result);
-
-        // Update position evaluations
         this.updatePositionEvaluations(gameData);
 
         console.log(`🎓 AI learned from game. New difficulty: ${this.difficulty}`);
     }
 
     adjustDifficultyBasedOnPerformance() {
-        const recentGames = this.performanceHistory.slice(-10); // Last 10 games
+        const recentGames = this.performanceHistory.slice(-10);
         if (recentGames.length < 5) return;
 
         const wins = recentGames.filter(game => game.result === 'win').length;
@@ -240,7 +193,7 @@ class ChessAILearner {
             this.difficulty = Math.max(2, this.difficulty - 1);
         }
 
-        // Add some randomness to prevent predictability
+        // Add randomness to prevent predictability
         if (Math.random() < 0.1) {
             this.difficulty += Math.random() < 0.5 ? -1 : 1;
             this.difficulty = Math.max(2, Math.min(6, this.difficulty));
@@ -248,7 +201,7 @@ class ChessAILearner {
     }
 
     learnFromOpening(moves, result) {
-        if (moves.length < 6) return; // Need at least 3 moves for each side
+        if (!moves || moves.length < 6) return;
 
         const opening = moves.slice(0, 6).join('_');
         if (!this.positionEvaluations.has(opening)) {
@@ -264,7 +217,7 @@ class ChessAILearner {
             data.score += 0.5;
         }
         
-        // If this opening performs poorly, reduce its weight
+        // If this opening performs poorly, adjust weights
         if (data.games >= 5 && (data.score / data.games) < 0.3) {
             this.adjustOpeningWeights(moves[0], moves[1], -0.1);
         }
@@ -280,7 +233,8 @@ class ChessAILearner {
     }
 
     updatePositionEvaluations(gameData) {
-        // Simple position evaluation learning
+        if (!gameData.moves) return;
+        
         const criticalMoves = this.identifyCriticalMoves(gameData.moves);
         
         criticalMoves.forEach(moveIndex => {
@@ -301,8 +255,6 @@ class ChessAILearner {
     }
 
     identifyCriticalMoves(moves) {
-        // Identify moves that are likely to be critical
-        // For now, just return middle game moves (moves 10-30)
         const critical = [];
         for (let i = 10; i < Math.min(30, moves.length); i += 2) {
             critical.push(i);
@@ -311,8 +263,7 @@ class ChessAILearner {
     }
 
     adjustDifficulty() {
-        // Return current difficulty with some variation
-        const variation = Math.floor(Math.random() * 3) - 1; // -1, 0, or 1
+        const variation = Math.floor(Math.random() * 3) - 1;
         return Math.max(2, Math.min(6, this.difficulty + variation));
     }
 
@@ -328,7 +279,7 @@ class ChessAILearner {
     getOpeningStatistics() {
         const stats = {};
         this.performanceHistory.forEach(game => {
-            if (game.moves.length >= 2) {
+            if (game.moves && game.moves.length >= 2) {
                 const opening = game.moves.slice(0, 2).join(' ');
                 if (!stats[opening]) {
                     stats[opening] = { games: 0, wins: 0, draws: 0 };
@@ -367,33 +318,31 @@ class ChessAILearner {
         console.log(`🔄 Imported learning data: ${this.performanceHistory.length} games, difficulty ${this.difficulty}`);
     }
 
-    // Advanced opening analysis
     analyzeOpening(moves) {
-        if (moves.length < 6) return null;
+        if (!moves || moves.length < 6) return null;
         
         const openingMoves = moves.slice(0, 6);
         const openingString = openingMoves.join(' ');
         
-        // Classify the opening
-        if (openingString.includes('e2-e4 e7-e5 g1-f3')) {
-            if (openingString.includes('f1-b5')) return 'Ruy Lopez';
-            if (openingString.includes('f1-c4')) return 'Italian Game';
-            if (openingString.includes('d2-d4')) return 'Scotch Game';
+        // Basic opening classification
+        if (openingString.includes('e2e4 e7e5 g1f3')) {
+            if (openingString.includes('f1b5')) return 'Ruy Lopez';
+            if (openingString.includes('f1c4')) return 'Italian Game';
+            if (openingString.includes('d2d4')) return 'Scotch Game';
         }
         
-        if (openingString.includes('d2-d4 d7-d5')) {
-            if (openingString.includes('c2-c4')) return 'Queen\'s Gambit';
-            if (openingString.includes('g1-f3')) return 'London System';
+        if (openingString.includes('d2d4 d7d5')) {
+            if (openingString.includes('c2c4')) return 'Queen\'s Gambit';
+            if (openingString.includes('g1f3')) return 'London System';
         }
         
-        if (openingString.includes('e2-e4 c7-c5')) return 'Sicilian Defense';
-        if (openingString.includes('e2-e4 e7-e6')) return 'French Defense';
-        if (openingString.includes('e2-e4 c7-c6')) return 'Caro-Kann Defense';
+        if (openingString.includes('e2e4 c7c5')) return 'Sicilian Defense';
+        if (openingString.includes('e2e4 e7e6')) return 'French Defense';
+        if (openingString.includes('e2e4 c7c6')) return 'Caro-Kann Defense';
         
         return 'Unknown Opening';
     }
 
-    // Suggest improvements based on game analysis
     getImprovementSuggestions() {
         if (this.performanceHistory.length < 10) {
             return ['Play more games to get personalized suggestions'];
@@ -401,7 +350,7 @@ class ChessAILearner {
         
         const suggestions = [];
         const recentGames = this.performanceHistory.slice(-20);
-        const avgGameLength = recentGames.reduce((sum, game) => sum + game.gameLength, 0) / recentGames.length;
+        const avgGameLength = recentGames.reduce((sum, game) => sum + (game.gameLength || 0), 0) / recentGames.length;
         
         if (avgGameLength < 30) {
             suggestions.push('Focus on improving opening preparation - games are ending too quickly');
@@ -421,7 +370,6 @@ class ChessAILearner {
         return suggestions.length > 0 ? suggestions : ['Keep practicing and analyzing your games!'];
     }
 
-    // Reset learning data
     reset() {
         this.performanceHistory = [];
         this.positionEvaluations.clear();

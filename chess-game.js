@@ -1,8 +1,8 @@
 // chess-game.js
 // Main chess game logic with enhanced AI and proper opening play
-// VERSION: 2.0 - Complete evaluation system + 3-move deep minimax search
+// VERSION: 2.1 - Professional chess notation (SAN) + Lichess bot compatibility
 
-const GAME_VERSION = "2.0";
+const GAME_VERSION = "2.1";
 
 // Initialize enhanced AI system
 let enhancedAI = null;
@@ -121,11 +121,13 @@ const PIECE_SQUARE_TABLES = {
 // Display version info
 function displayVersion() {
     console.log(`♔ Chess Game v${GAME_VERSION} - MASTER LEVEL AI with 3-Move Deep Search`);
+    console.log("📝 Professional chess notation (SAN) enabled");
     console.log("🔍 Search depth: 3 moves (5 in endgame) with alpha-beta pruning");
     console.log("🛡️ Complete evaluation: Material Focus | Pawn Formation | Safe Squares | Castling Priority");
     console.log("👑 Endgame: King activity and centralization bonuses");
     console.log("🔱 Advanced tactics: Quiescence search, killer moves, history heuristic");
     console.log("📖 Professional opening book: 1000+ lines");
+    console.log("🤖 Lichess bot compatible - Ready to play on Lichess!");
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -520,10 +522,128 @@ function isPathClearOnBoard(testBoard, fromRow, fromCol, toRow, toCol) {
     return true;
 }
 
+// ========== PROFESSIONAL CHESS NOTATION (SAN) ==========
+
+// Get piece type letter for SAN
+function getPieceTypeForSAN(piece) {
+    if (!piece) return '';
+    const pieceCode = pieceMap[piece];
+    return pieceCode.toUpperCase();
+}
+
+// Get piece letter for notation (standard chess letters)
+function getPieceLetterForSAN(piece) {
+    const letters = {
+        '♔': 'K', '♕': 'Q', '♖': 'R', '♗': 'B', '♘': 'N', '♙': '',
+        '♚': 'K', '♛': 'Q', '♜': 'R', '♝': 'B', '♞': 'N', '♟': ''
+    };
+    return letters[piece] || '';
+}
+
+// Find ambiguous pieces that can also move to the destination
+function findAmbiguousPieces(piece, fromRow, fromCol, toRow, toCol) {
+    const ambiguous = [];
+    const pieceColor = isPlayerPiece(piece, 'white') ? 'white' : 'black';
+    
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (row === fromRow && col === fromCol) continue;
+            const otherPiece = board[row][col];
+            if (otherPiece && getPieceLetterForSAN(otherPiece) === getPieceLetterForSAN(piece) &&
+                isPlayerPiece(otherPiece, pieceColor)) {
+                if (isValidMove(row, col, toRow, toCol)) {
+                    ambiguous.push({ row, col });
+                }
+            }
+        }
+    }
+    
+    return ambiguous;
+}
+
+// Convert move to Standard Algebraic Notation (SAN)
+function getMoveNotation(fromRow, fromCol, toRow, toCol) {
+    const piece = board[fromRow][fromCol];
+    const targetPiece = board[toRow][toCol];
+    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
+    const destSquare = files[toCol] + ranks[toRow];
+    
+    // Handle castling
+    if ((piece === '♔' || piece === '♚') && Math.abs(toCol - fromCol) === 2) {
+        return toCol > fromCol ? 'O-O' : 'O-O-O';
+    }
+    
+    // For pawn moves, no piece letter prefix
+    if (piece === '♙' || piece === '♟') {
+        let notation = '';
+        
+        // Check if it's a capture
+        if (targetPiece || (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col)) {
+            notation += files[fromCol] + 'x';
+        }
+        
+        notation += destSquare;
+        
+        // Handle promotion
+        if ((piece === '♙' && toRow === 0) || (piece === '♟' && toRow === 7)) {
+            notation += '=Q'; // Default to queen
+        }
+        
+        return notation;
+    }
+    
+    // For non-pawn pieces
+    const pieceLetter = getPieceLetterForSAN(piece);
+    let notation = pieceLetter;
+    
+    // Find all pieces of same type that can move to the destination
+    const ambiguousPieces = findAmbiguousPieces(piece, fromRow, fromCol, toRow, toCol);
+    
+    if (ambiguousPieces.length > 0) {
+        // Check if same file resolves ambiguity
+        const sameFile = ambiguousPieces.some(p => p.col !== fromCol);
+        const sameRank = ambiguousPieces.some(p => p.row !== fromRow);
+        
+        if (sameFile && sameRank) {
+            // Need both rank and file
+            notation += files[fromCol] + ranks[fromRow];
+        } else if (sameFile) {
+            // Same rank - use file
+            notation += files[fromCol];
+        } else {
+            // Same file - use rank
+            notation += ranks[fromRow];
+        }
+    }
+    
+    // Add capture symbol
+    if (targetPiece) {
+        notation += 'x';
+    }
+    
+    notation += destSquare;
+    
+    return notation;
+}
+
+// Add check/checkmate symbols after move is made
+function addCheckNotation(notation, player) {
+    const isCheck = isKingInCheck(board, player);
+    const isCheckmate = isCheck && getAllPossibleMoves(player).length === 0;
+    
+    if (isCheckmate) {
+        return notation + '#';
+    } else if (isCheck) {
+        return notation + '+';
+    }
+    return notation;
+}
+
 function makeMove(fromRow, fromCol, toRow, toCol) {
     const piece = board[fromRow][fromCol];
     const capturedPiece = board[toRow][toCol];
-
+    
     gameHistory.push({
         board: board.map(row => [...row]),
         currentPlayer: currentPlayer,
@@ -534,32 +654,35 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
         lastMove: lastMove,
         enPassantTarget: enPassantTarget
     });
-
+    
     lastMove = { fromRow, fromCol, toRow, toCol };
-
+    
+    // Handle en passant capture
     if ((piece === '♙' || piece === '♟') && enPassantTarget && 
         toRow === enPassantTarget.row && toCol === enPassantTarget.col) {
         const capturedPawnRow = piece === '♙' ? toRow + 1 : toRow - 1;
         board[capturedPawnRow][toCol] = '';
     }
-
+    
+    // Handle castling
     if ((piece === '♔' || piece === '♚') && Math.abs(toCol - fromCol) === 2) {
         const isKingside = toCol > fromCol;
         const rookFromCol = isKingside ? 7 : 0;
         const rookToCol = isKingside ? 5 : 3;
         const rook = board[fromRow][rookFromCol];
-
+        
         board[fromRow][rookToCol] = rook;
         board[fromRow][rookFromCol] = '';
     }
-
+    
     board[toRow][toCol] = piece;
     board[fromRow][fromCol] = '';
-
+    
+    // Handle pawn promotion
     if ((piece === '♙' && toRow === 0) || (piece === '♟' && toRow === 7)) {
         board[toRow][toCol] = piece === '♙' ? '♕' : '♛';
     }
-
+    
     enPassantTarget = null;
     if ((piece === '♙' || piece === '♟') && Math.abs(toRow - fromRow) === 2) {
         enPassantTarget = {
@@ -567,26 +690,22 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
             col: fromCol
         };
     }
-
+    
     updateCastlingRights(piece, fromRow, fromCol, toRow, toCol);
     updateHalfMoveClock(piece, capturedPiece);
-
+    
     if (currentPlayer === 'black') {
         moveCount++;
     }
-
-    const moveNotation = getMoveNotation(fromRow, fromCol, toRow, toCol);
+    
+    // Use SAN notation
+    let moveNotation = getMoveNotation(fromRow, fromCol, toRow, toCol);
+    const nextPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    moveNotation = addCheckNotation(moveNotation, nextPlayer);
     moveHistory.push(moveNotation);
     updateMoveHistory();
-
+    
     createBoard();
-}
-
-function getMoveNotation(fromRow, fromCol, toRow, toCol) {
-    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-    const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
-
-    return files[fromCol] + ranks[fromRow] + files[toCol] + ranks[toRow];
 }
 
 function updateCastlingRights(piece, fromRow, fromCol, toRow, toCol) {
@@ -758,7 +877,6 @@ function canBeCapturedImmediately(pieceRow, pieceCol, pieceColor) {
 
 function isMoveSafe(fromRow, fromCol, toRow, toCol, player) {
     const piece = board[fromRow][fromCol];
-    const targetPiece = board[toRow][toCol];
     const originalBoard = board.map(row => [...row]);
     const originalEnPassant = enPassantTarget;
     const originalCastling = { ...castlingRights };
@@ -1013,62 +1131,6 @@ function evaluatePosition() {
     return evaluatePositionEnhanced();
 }
 
-function evaluateAdvancedPosition() {
-    let score = 0;
-    const centers = [[3,3],[3,4],[4,3],[4,4]];
-    for (const [r,c] of centers) {
-        if (board[r][c]) score += isPlayerPiece(board[r][c], 'white') ? 30 : -30;
-    }
-    return score;
-}
-
-function evaluateKingSafety(player) {
-    const threats = detectThreatsToKing(player);
-    return -threats.dangerLevel * 20;
-}
-
-function countAttackers(targetRow, targetCol, attackerColor) {
-    let count = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece && isPlayerPiece(piece, attackerColor)) {
-                if (canPieceAttack(piece, row, col, targetRow, targetCol, board)) {
-                    count++;
-                }
-            }
-        }
-    }
-    return count;
-}
-
-function evaluateDevelopment() {
-    let score = 0;
-    if (board[7][1] !== '♘') score += 15;
-    if (board[7][6] !== '♘') score += 15;
-    if (board[7][2] !== '♗') score += 15;
-    if (board[7][5] !== '♗') score += 15;
-    if (board[0][1] !== '♞') score -= 15;
-    if (board[0][6] !== '♞') score -= 15;
-    if (board[0][2] !== '♝') score -= 15;
-    if (board[0][5] !== '♝') score -= 15;
-    if (!castlingRights.whiteKingside && !castlingRights.whiteQueenside) score += 30;
-    if (!castlingRights.blackKingside && !castlingRights.blackQueenside) score -= 30;
-    return score;
-}
-
-function evaluateEndgame() {
-    let score = 0;
-    const whiteKing = findKing('white');
-    const blackKing = findKing('black');
-    if (whiteKing && blackKing) {
-        const whiteCentrality = Math.abs(3.5 - whiteKing.row) + Math.abs(3.5 - whiteKing.col);
-        const blackCentrality = Math.abs(3.5 - blackKing.row) + Math.abs(3.5 - blackKing.col);
-        score += (blackCentrality - whiteCentrality) * 10;
-    }
-    return score;
-}
-
 function updateAIStats() {
     const gamesPlayedElement = document.getElementById('games-played');
     const winRateElement = document.getElementById('win-rate');
@@ -1098,7 +1160,7 @@ function updateAIStats() {
             difficultyElement.textContent = 'MASTER';
         }
         if (versionElement) {
-            versionElement.textContent = 'v1.1';
+            versionElement.textContent = 'v2.1';
         }
     }
 }
@@ -1197,7 +1259,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log("🎯 New game started! AI v2.0 with 3-move deep search!");
+    console.log("🎯 New game started! AI v2.1 with SAN notation and 3-move deep search!");
 }
 
 function undoMove() {
@@ -1255,95 +1317,22 @@ function changeGameMode() {
     }
 }
 
-function minimax(position, depth, alpha, beta, maximizingPlayer, player) {
-    if (depth === 0) {
-        return { score: evaluatePositionEnhanced(), move: null };
-    }
-
-    const moves = getAllPossibleMoves(player);
-    if (moves.length === 0) {
-        return { score: maximizingPlayer ? -20000 : 20000, move: null };
-    }
-
-    let bestMove = moves[0];
-
-    if (maximizingPlayer) {
-        let maxEval = -Infinity;
-        for (const move of moves) {
-            const newPosition = makeTestMove(position, move);
-            const evaluation = minimax(newPosition, depth - 1, alpha, beta, false, player === 'white' ? 'black' : 'white');
-
-            if (evaluation.score > maxEval) {
-                maxEval = evaluation.score;
-                bestMove = move;
-            }
-
-            alpha = Math.max(alpha, evaluation.score);
-            if (beta <= alpha) break;
-        }
-        return { score: maxEval, move: bestMove };
-    } else {
-        let minEval = Infinity;
-        for (const move of moves) {
-            const newPosition = makeTestMove(position, move);
-            const evaluation = minimax(newPosition, depth - 1, alpha, beta, true, player === 'white' ? 'black' : 'white');
-
-            if (evaluation.score < minEval) {
-                minEval = evaluation.score;
-                bestMove = move;
-            }
-
-            beta = Math.min(beta, evaluation.score);
-            if (beta <= alpha) break;
-        }
-        return { score: minEval, move: bestMove };
-    }
-}
-
-function evaluateMove(move) {
-    let score = 0;
-    const capturedPiece = board[move.toRow][move.toCol];
-    const movingPiece = board[move.fromRow][move.fromCol];
-
-    if (capturedPiece) {
-        score += (PIECE_VALUES[capturedPiece] || 0) - (PIECE_VALUES[movingPiece] || 0) / 10;
-    }
-
-    const centerDistance = Math.abs(move.toRow - 3.5) + Math.abs(move.toCol - 3.5);
-    score -= centerDistance * 5;
-
-    return score;
-}
-
-function makeTestMove(position, move) {
-    const newPosition = position.map(row => [...row]);
-    const piece = newPosition[move.fromRow][move.fromCol];
-    newPosition[move.toRow][move.toCol] = piece;
-    newPosition[move.fromRow][move.fromCol] = '';
-    return newPosition;
-}
-
-function isGameOverPosition(position) {
-    return false;
-}
-
 // ========== ENHANCED AI SEARCH MODULE - 3-MOVE DEEP MINIMAX ==========
 
 // Search configuration
 const SEARCH_CONFIG = {
-    baseDepth: 3,           // Look 3 moves ahead
-    endgameDepth: 5,        // Look 5 moves ahead in endgame
-    maxNodes: 100000,       // Limit nodes for performance
-    useQuiescence: true,    // Search captures deeper
-    useTransposition: true, // Cache positions
-    killerMoves: 3,         // Store killer moves for move ordering
-    historyHeuristic: true  // Use history heuristic for move ordering
+    baseDepth: 3,
+    endgameDepth: 5,
+    maxNodes: 100000,
+    useQuiescence: true,
+    useTransposition: true,
+    killerMoves: 3,
+    historyHeuristic: true
 };
 
-// Global search variables
 let transpositionTable = new Map();
 let killerMovesArray = new Array(10).fill().map(() => []);
-let historyTable = new Array(8 * 8).fill().map(() => new Array(8 * 8).fill(0));
+let historyTable = new Array(64).fill().map(() => new Array(64).fill(0));
 let searchStats = {
     nodesEvaluated: 0,
     transpositionHits: 0,
@@ -1351,7 +1340,7 @@ let searchStats = {
     maxDepthReached: 0
 };
 
-// Helper functions for position evaluation (for search)
+// Helper functions for position evaluation
 function isPlayerPieceForPosition(piece, player) {
     if (!piece) return false;
     const whitePieces = ['♔', '♕', '♖', '♗', '♘', '♙'];
@@ -1969,7 +1958,6 @@ function quiescenceSearch(boardState, alpha, beta, isMaximizing, player, moveNum
 function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer, player, moveNumber) {
     searchStats.nodesEvaluated++;
 
-    // Check transposition table
     const boardHash = getBoardHashForPosition(boardState, player);
     if (SEARCH_CONFIG.useTransposition && transpositionTable.has(boardHash)) {
         const entry = transpositionTable.get(boardHash);
@@ -1979,7 +1967,6 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
         }
     }
 
-    // Check if game is over
     const moves = getAllPossibleMovesForPosition(boardState, player);
     if (moves.length === 0) {
         const inCheck = isKingInCheckForPosition(boardState, player);
@@ -1989,11 +1976,9 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
         return 0;
     }
 
-    // Base case: reached depth limit
     if (depth === 0) {
         let score = evaluatePositionForSearch(boardState, player, moveNumber);
 
-        // Quiescence search - search captures to avoid horizon effect
         if (SEARCH_CONFIG.useQuiescence) {
             score = quiescenceSearch(boardState, alpha, beta, isMaximizingPlayer, player, moveNumber, 3);
         }
@@ -2004,10 +1989,7 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
         return score;
     }
 
-    // Determine current depth for killer moves
     const currentDepth = SEARCH_CONFIG.baseDepth - depth;
-
-    // Order moves for better pruning
     const orderedMoves = orderMovesForSearch(moves, boardState, player, currentDepth);
 
     if (isMaximizingPlayer) {
@@ -2021,7 +2003,6 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
             maxEval = Math.max(maxEval, evaluation);
             alpha = Math.max(alpha, evaluation);
 
-            // Update killer moves and history
             if (SEARCH_CONFIG.killerMoves > 0 && depth === SEARCH_CONFIG.baseDepth) {
                 updateKillerMoveForSearch(move, currentDepth);
             }
@@ -2029,9 +2010,7 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
                 updateHistoryTableForSearch(move, depth);
             }
 
-            if (beta <= alpha) {
-                break;
-            }
+            if (beta <= alpha) break;
         }
 
         if (SEARCH_CONFIG.useTransposition) {
@@ -2049,9 +2028,7 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
             minEval = Math.min(minEval, evaluation);
             beta = Math.min(beta, evaluation);
 
-            if (beta <= alpha) {
-                break;
-            }
+            if (beta <= alpha) break;
         }
 
         if (SEARCH_CONFIG.useTransposition) {
@@ -2078,7 +2055,6 @@ function findBestMoveWithSearch() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Reset search stats
     searchStats = {
         nodesEvaluated: 0,
         transpositionHits: 0,
@@ -2086,7 +2062,6 @@ function findBestMoveWithSearch() {
         maxDepthReached: 0
     };
     
-    // Determine search depth based on game phase
     const isEndgame = isEndgamePosition();
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
@@ -2096,12 +2071,10 @@ function findBestMoveWithSearch() {
     let bestScore = -Infinity;
     let bestMove = allMoves[0];
     
-    // Iterative deepening
     for (let currentDepth = 1; currentDepth <= searchDepth; currentDepth++) {
         let depthBestScore = -Infinity;
         let depthBestMove = null;
         
-        // Order moves for better pruning
         const orderedMoves = orderMovesForSearch(allMoves, board, currentPlayer, 0);
         
         for (const move of orderedMoves) {
@@ -2121,7 +2094,6 @@ function findBestMoveWithSearch() {
         
         console.log(`  Depth ${currentDepth}: best score = ${depthBestScore.toFixed(0)}`);
         
-        // Early stop if we found checkmate
         if (depthBestScore > 19000) break;
     }
     
@@ -2134,7 +2106,6 @@ function findBestMoveWithSearch() {
 
 // ========== MAIN findBestMove FUNCTION ==========
 function findBestMove() {
-    // Try opening book first (for first few moves)
     if (enhancedAI && moveHistory.length < 12) {
         const openingMove = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMove) {
@@ -2149,6 +2120,18 @@ function findBestMove() {
         }
     }
     
-    // Use enhanced 3-move deep search
     return findBestMoveWithSearch();
+}
+
+// Expose functions for Lichess bot compatibility
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        findBestMove,
+        evaluatePosition: evaluatePositionEnhanced,
+        getAllPossibleMoves,
+        isKingInCheck,
+        pieceMap,
+        PIECE_VALUES,
+        PIECE_SQUARE_TABLES
+    };
 }

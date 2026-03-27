@@ -1,8 +1,8 @@
-// chess-game.js - v2.2 with Transposition Table Memory
+// chess-game.js - v2.3
 // Main chess game logic with enhanced AI and proper opening play
-// VERSION: 2.2 - Professional chess notation (SAN) + Full Transposition Table Memory
+// VERSION: 2.3 - Complete Endgame Knowledge + Aggressive King + Pawn Promotion Priority
 
-const GAME_VERSION = "2.2";
+const GAME_VERSION = "2.3";
 
 // Initialize enhanced AI system
 let enhancedAI = null;
@@ -118,7 +118,7 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== ENHANCED AI SEARCH MODULE ==========
+// ========== ENHANCED AI SEARCH CONFIGURATION ==========
 const SEARCH_CONFIG = {
     baseDepth: 3,
     endgameDepth: 5,
@@ -129,7 +129,7 @@ const SEARCH_CONFIG = {
     historyHeuristic: true
 };
 
-// ========== TRANSPOSITION TABLE (Persistent Memory) ==========
+// ========== TRANSPOSITION TABLE ==========
 class TranspositionTable {
     constructor(maxSize = 500000) {
         this.table = new Map();
@@ -139,7 +139,6 @@ class TranspositionTable {
     }
     
     getHash(boardState, player) {
-        // Zobrist-style fast hash
         let hash = player === 'white' ? 1 : 0;
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
@@ -157,7 +156,6 @@ class TranspositionTable {
         if (!SEARCH_CONFIG.useTransposition) return null;
         const hash = this.getHash(boardState, player);
         const entry = this.table.get(hash);
-        
         if (entry && entry.depth >= depth) {
             this.hits++;
             if (entry.flag === 'exact') return entry.score;
@@ -169,8 +167,6 @@ class TranspositionTable {
     
     set(boardState, player, depth, score, flag, bestMove) {
         if (!SEARCH_CONFIG.useTransposition) return;
-        
-        // Limit table size
         if (this.table.size > this.maxSize) {
             const toDelete = Math.floor(this.maxSize * 0.2);
             const keys = Array.from(this.table.keys());
@@ -178,15 +174,8 @@ class TranspositionTable {
                 this.table.delete(keys[i]);
             }
         }
-        
         const hash = this.getHash(boardState, player);
-        this.table.set(hash, {
-            depth: depth,
-            score: score,
-            flag: flag,
-            bestMove: bestMove,
-            timestamp: Date.now()
-        });
+        this.table.set(hash, { depth, score, flag, bestMove, timestamp: Date.now() });
         this.inserts++;
     }
     
@@ -194,7 +183,6 @@ class TranspositionTable {
         this.table.clear();
         this.hits = 0;
         this.inserts = 0;
-        console.log("🧹 Transposition table cleared");
     }
     
     getStats() {
@@ -207,12 +195,10 @@ class TranspositionTable {
     }
 }
 
-// ========== KILLER MOVES TABLE ==========
+// ========== GLOBAL SEARCH VARIABLES ==========
+let transpositionTable = new TranspositionTable();
 let killerMovesArray = new Array(10).fill().map(() => []);
 let historyTable = new Array(64).fill().map(() => new Array(64).fill(0));
-
-// ========== GLOBAL TRANSPOSITION TABLE ==========
-let transpositionTable = new TranspositionTable();
 let searchStats = {
     nodesEvaluated: 0,
     transpositionHits: 0,
@@ -220,16 +206,330 @@ let searchStats = {
     maxDepthReached: 0
 };
 
+// ========== ENDGAME KNOWLEDGE FUNCTIONS ==========
+
+// Check if we're in endgame
+function isEndgamePosition() {
+    let pieceCount = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = board[row][col];
+            if (piece && piece !== '♔' && piece !== '♚') {
+                pieceCount++;
+            }
+        }
+    }
+    return pieceCount <= 10;
+}
+
+function isEndgamePositionForPosition(boardState) {
+    let pieceCount = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row][col];
+            if (piece && piece !== '♔' && piece !== '♚') {
+                pieceCount++;
+            }
+        }
+    }
+    return pieceCount <= 10;
+}
+
+// Check if it's a pure pawn endgame (only kings and pawns)
+function isPurePawnEndgame(boardState) {
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row][col];
+            if (piece && piece !== '♔' && piece !== '♚' && piece !== '♙' && piece !== '♟') {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// SQUARE OF THE PAWN RULE - Can king catch the pawn?
+function canKingCatchPawn(boardState, pawnRow, pawnCol, pawnColor) {
+    const kingSymbol = pawnColor === 'white' ? '♚' : '♔';
+    let kingRow = -1, kingCol = -1;
+    
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === kingSymbol) {
+                kingRow = row; kingCol = col;
+                break;
+            }
+        }
+        if (kingRow !== -1) break;
+    }
+    
+    if (kingRow === -1) return false;
+    
+    const promotionRow = pawnColor === 'white' ? 0 : 7;
+    const pawnDistanceToPromotion = Math.abs(pawnRow - promotionRow);
+    const kingDistanceToPawn = Math.abs(kingRow - pawnRow) + Math.abs(kingCol - pawnCol);
+    
+    // If it's the pawn's turn, subtract 1 from distance
+    const pawnTurn = currentPlayer === pawnColor;
+    const effectiveKingDistance = pawnTurn ? kingDistanceToPawn : kingDistanceToPawn - 1;
+    
+    return effectiveKingDistance <= pawnDistanceToPromotion;
+}
+
+// Check if a pawn is passed
+function isPassedPawn(boardState, row, col, player) {
+    const enemyPawn = player === 'white' ? '♟' : '♙';
+    const direction = player === 'white' ? -1 : 1;
+    
+    for (let r = row + direction; r >= 0 && r < 8; r += direction) {
+        for (let c = Math.max(0, col - 1); c <= Math.min(7, col + 1); c++) {
+            if (boardState[r][c] === enemyPawn) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// King opposition evaluation
+function evaluateKingOpposition(boardState, player) {
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    if (!isEndgame) return 0;
+    
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    const enemyKingSymbol = player === 'white' ? '♚' : '♔';
+    
+    let kingRow = -1, kingCol = -1;
+    let enemyRow = -1, enemyCol = -1;
+    
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === kingSymbol) {
+                kingRow = row; kingCol = col;
+            }
+            if (boardState[row][col] === enemyKingSymbol) {
+                enemyRow = row; enemyCol = col;
+            }
+        }
+    }
+    
+    if (kingRow === -1 || enemyRow === -1) return 0;
+    
+    let score = 0;
+    
+    // Direct opposition
+    if (Math.abs(kingRow - enemyRow) === 0 && Math.abs(kingCol - enemyCol) === 2) {
+        score += 150;
+    }
+    // Diagonal opposition
+    if (Math.abs(kingRow - enemyRow) === 1 && Math.abs(kingCol - enemyCol) === 1) {
+        score += 80;
+    }
+    // Distant opposition
+    if (Math.abs(kingRow - enemyRow) === 0 && Math.abs(kingCol - enemyCol) === 4) {
+        score += 60;
+    }
+    
+    return score;
+}
+
+// ========== MASSIVELY ENHANCED ENDGAME EVALUATION ==========
+function evaluateEndgameKingActivityForPosition(boardState, player) {
+    let score = 0;
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    if (!isEndgame) return 0;
+
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    let kingRow = -1, kingCol = -1;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === kingSymbol) {
+                kingRow = row; kingCol = col;
+                break;
+            }
+        }
+        if (kingRow !== -1) break;
+    }
+    if (kingRow === -1) return 0;
+
+    const opponentColor = player === 'white' ? 'black' : 'white';
+    
+    // ========== KING CAPTURES UNDEFENDED PIECES - MASSIVE BONUS ==========
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = kingRow + dr;
+            const nc = kingCol + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                const target = boardState[nr][nc];
+                if (target && !isPlayerPieceForPosition(target, player)) {
+                    const isDefended = isPieceDefendedForPosition(boardState, nr, nc, opponentColor);
+                    if (!isDefended) {
+                        // KING TAKES UNDEFENDED PIECE - HUGE BONUS
+                        score += 1000;
+                    } else {
+                        // Even defended pieces can be taken if value is low
+                        const targetValue = PIECE_VALUES[target] || 0;
+                        if (targetValue <= 300) {
+                            score += 400;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // King centralization bonus - move towards center
+    const centerDistance = Math.abs(3.5 - kingRow) + Math.abs(3.5 - kingCol);
+    score += (14 - centerDistance) * 30;
+    
+    // King moving towards enemy king (aggression)
+    let enemyKingRow = -1, enemyKingCol = -1;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === (player === 'white' ? '♚' : '♔')) {
+                enemyKingRow = row; enemyKingCol = col;
+                break;
+            }
+        }
+        if (enemyKingRow !== -1) break;
+    }
+    
+    if (enemyKingRow !== -1) {
+        const distanceToEnemyKing = Math.abs(kingRow - enemyKingRow) + Math.abs(kingCol - enemyKingCol);
+        score += (14 - distanceToEnemyKing) * 20;
+    }
+    
+    // King moving towards enemy pawns
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row][col];
+            if (piece === (player === 'white' ? '♟' : '♙')) {
+                const distanceToPawn = Math.abs(kingRow - row) + Math.abs(kingCol - col);
+                score += (14 - distanceToPawn) * 15;
+            }
+        }
+    }
+    
+    // King opposition in pawn endgames
+    if (isPurePawnEndgame(boardState)) {
+        score += evaluateKingOpposition(boardState, player);
+    }
+    
+    return score;
+}
+
+// ========== MASSIVELY ENHANCED PAWN PROMOTION EVALUATION ==========
+function evaluatePawnPromotionForPosition(boardState, player) {
+    let score = 0;
+    const pawnColor = player === 'white' ? '♙' : '♟';
+    const promotionRow = player === 'white' ? 0 : 7;
+    const direction = player === 'white' ? -1 : 1;
+    
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === pawnColor) {
+                const distanceToPromotion = Math.abs(row - promotionRow);
+                
+                // HUGE BONUS for being close to promotion
+                if (distanceToPromotion === 1) {
+                    score += 800; // One step away from promotion!
+                } else if (distanceToPromotion === 2) {
+                    score += 400;
+                } else if (distanceToPromotion === 3) {
+                    score += 200;
+                } else {
+                    score += (7 - distanceToPromotion) * 50;
+                }
+                
+                // Check if pawn is blocked
+                const nextRow = row + direction;
+                const isBlocked = nextRow >= 0 && nextRow < 8 && boardState[nextRow][col];
+                if (!isBlocked) {
+                    score += 50; // Unblocked pawn
+                }
+                
+                // Check if pawn is passed
+                const isPassed = isPassedPawn(boardState, row, col, player);
+                if (isPassed) {
+                    score += 300; // Passed pawn bonus
+                    
+                    // Rule of the Square - check if king can catch
+                    const kingCanCatch = canKingCatchPawn(boardState, row, col, player);
+                    if (!kingCanCatch) {
+                        score += 500; // Unstoppable passed pawn!
+                    }
+                }
+                
+                // Check if pawn can capture to advance
+                for (const dc of [-1, 1]) {
+                    const captureRow = row + direction;
+                    const captureCol = col + dc;
+                    if (captureRow >= 0 && captureRow < 8 && captureCol >= 0 && captureCol < 8) {
+                        const target = boardState[captureRow][captureCol];
+                        if (target && isPlayerPieceForPosition(target, player === 'white' ? 'black' : 'white')) {
+                            score += 150; // Can capture to advance
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return score;
+}
+
+// ========== DEFENSIVE ENDGAME - STOP ENEMY PROMOTION ==========
+function evaluateDefensiveEndgame(boardState, player) {
+    let score = 0;
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    if (!isEndgame) return 0;
+    
+    const opponentColor = player === 'white' ? 'black' : 'white';
+    const enemyPawn = player === 'white' ? '♟' : '♙';
+    const promotionRow = player === 'white' ? 0 : 7;
+    
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === enemyPawn) {
+                const distanceToPromotion = Math.abs(row - promotionRow);
+                
+                // Enemy pawn close to promotion - BIG PENALTY
+                if (distanceToPromotion === 1) {
+                    score -= 600;
+                } else if (distanceToPromotion === 2) {
+                    score -= 300;
+                } else if (distanceToPromotion === 3) {
+                    score -= 150;
+                }
+                
+                // Check if enemy pawn is passed
+                const isPassed = isPassedPawn(boardState, row, col, opponentColor);
+                if (isPassed) {
+                    score -= 200;
+                    
+                    // Check if our king can catch it
+                    const kingCanCatch = canKingCatchPawn(boardState, row, col, opponentColor);
+                    if (!kingCanCatch) {
+                        score -= 400; // Unstoppable enemy passed pawn!
+                    }
+                }
+            }
+        }
+    }
+    return score;
+}
+
 // ========== DISPLAY VERSION ==========
 function displayVersion() {
-    console.log(`♔ Chess Game v${GAME_VERSION} - MASTER AI with Transposition Table Memory`);
-    console.log("💾 Transposition Table: 500,000 positions cached across game");
-    console.log("🔍 Search depth: 3 moves (5 in endgame) with alpha-beta pruning");
+    console.log(`♔ Chess Game v${GAME_VERSION} - COMPLETE ENDGAME MASTERY`);
+    console.log("👑 King Aggression: +1000 bonus for capturing undefended pieces");
+    console.log("♙ Pawn Priority: +800 bonus for pawns one step from promotion");
+    console.log("📐 Rule of the Square: Prevents enemy pawn promotion");
+    console.log("🎯 Passed Pawn Bonus: +300 for passed pawns, +500 for unstoppable");
+    console.log("⚔️ King Opposition: +150 for direct opposition");
+    console.log("💾 Transposition Table: 500,000 positions cached");
+    console.log("🔍 Search depth: 3 moves (5 in endgame)");
     console.log("📝 Professional chess notation (SAN) enabled");
-    console.log("🛡️ Complete evaluation: Material Focus | Pawn Formation | Safe Squares | Castling Priority");
-    console.log("👑 Endgame: King activity and centralization bonuses");
-    console.log("🔱 Advanced tactics: Quiescence search, killer moves, history heuristic");
-    console.log("📖 Professional opening book: 1000+ lines");
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -242,7 +542,7 @@ window.addEventListener('load', function() {
     if (typeof ChessAILearner !== 'undefined') {
         enhancedAI = new ChessAILearner();
         loadGameHistory();
-        console.log(`🧠 Enhanced AI v${enhancedAI.version} loaded with Transposition Table!`);
+        console.log(`🧠 Enhanced AI v${enhancedAI.version} loaded with Complete Endgame Knowledge!`);
     } else {
         console.log("ChessAILearner not found, using basic AI");
     }
@@ -253,8 +553,9 @@ window.addEventListener('load', function() {
     changeGameMode();
     displayVersion();
 
-    console.log("♔ Chess Game Loaded - MASTER AI with 500k Position Memory! ♛");
-    console.log("💾 The AI remembers every position it calculates - no repeated work!");
+    console.log("♔ Chess Game Loaded - COMPLETE ENDGAME MASTERY! ♛");
+    console.log("👑 King will now aggressively capture undefended pieces!");
+    console.log("♙ Pawns will race to promotion with massive bonuses!");
 });
 
 // Load game history from session storage
@@ -893,6 +1194,7 @@ function updateMoveHistory() {
 }
 
 // ========== ADVANCED AI FUNCTIONS ==========
+
 function isPieceDefended(pieceRow, pieceCol, defenderColor) {
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
@@ -1172,7 +1474,7 @@ function updateAIStats() {
         gamesPlayedElement.textContent = '0';
         winRateElement.textContent = '50%';
         if (difficultyElement) difficultyElement.textContent = 'MASTER';
-        if (versionElement) versionElement.textContent = 'v2.2';
+        if (versionElement) versionElement.textContent = 'v2.3';
     }
 }
 
@@ -1269,7 +1571,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log("🎯 New game started! AI v2.2 with 500k Transposition Table Memory!");
+    console.log("🎯 New game started! AI v2.3 with Complete Endgame Mastery!");
 }
 
 function undoMove() {
@@ -1411,8 +1713,7 @@ function isKingInCheckForPosition(boardState, player) {
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             if (boardState[row][col] === kingSymbol) {
-                kingRow = row;
-                kingCol = col;
+                kingRow = row; kingCol = col;
                 break;
             }
         }
@@ -1501,19 +1802,6 @@ function getAllPossibleMovesForPosition(boardState, player) {
         }
     }
     return moves;
-}
-
-function isEndgamePositionForPosition(boardState) {
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                pieceCount++;
-            }
-        }
-    }
-    return pieceCount <= 10;
 }
 
 function getPieceMovesForPosition(boardState, fromRow, fromCol, player) {
@@ -1658,46 +1946,10 @@ function evaluateCastlingPriorityForPosition(boardState, player, moveNumber) {
     return score;
 }
 
-function evaluateEndgameKingActivityForPosition(boardState, player) {
-    let score = 0;
-    const isEndgame = isEndgamePositionForPosition(boardState);
-    if (!isEndgame) return 0;
-
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    let kingRow = -1, kingCol = -1;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === kingSymbol) {
-                kingRow = row; kingCol = col; break;
-            }
-        }
-        if (kingRow !== -1) break;
-    }
-    if (kingRow === -1) return 0;
-
-    const centerDistance = Math.abs(3.5 - kingRow) + Math.abs(3.5 - kingCol);
-    score += (14 - centerDistance) * 15;
-
-    const opponentColor = player === 'white' ? 'black' : 'white';
-    for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-            if (dr === 0 && dc === 0) continue;
-            const nr = kingRow + dr, nc = kingCol + dc;
-            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
-                const target = boardState[nr][nc];
-                if (target && !isPlayerPieceForPosition(target, player) && target !== (player === 'white' ? '♚' : '♔')) {
-                    const isDefended = isPieceDefendedForPosition(boardState, nr, nc, opponentColor);
-                    if (!isDefended) score += 500;
-                }
-            }
-        }
-    }
-    return score;
-}
-
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     let evaluation = 0;
-
+    
+    // Material balance
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row][col];
@@ -1707,16 +1959,33 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             }
         }
     }
-
+    
+    // 1. Material Focus (capture opportunities)
     evaluation += evaluateMaterialFocusForPosition(boardState, player) * 0.1;
+    
+    // 2. Pawn Formation
     evaluation += evaluatePawnFormationForPosition(boardState, player) * 0.05;
     evaluation -= evaluatePawnFormationForPosition(boardState, player === 'white' ? 'black' : 'white') * 0.05;
+    
+    // 3. Safe Squares
     evaluation += evaluateSafeSquaresForPosition(boardState, player) * 0.08;
     evaluation -= evaluateSafeSquaresForPosition(boardState, player === 'white' ? 'black' : 'white') * 0.08;
+    
+    // 4. Castling Priority
     evaluation += evaluateCastlingPriorityForPosition(boardState, player, moveNumber) * 0.1;
+    
+    // 5. ENDGAME: Aggressive King Activity
     evaluation += evaluateEndgameKingActivityForPosition(boardState, player);
     evaluation -= evaluateEndgameKingActivityForPosition(boardState, player === 'white' ? 'black' : 'white');
-
+    
+    // 6. ENDGAME: Pawn Promotion
+    evaluation += evaluatePawnPromotionForPosition(boardState, player);
+    evaluation -= evaluatePawnPromotionForPosition(boardState, player === 'white' ? 'black' : 'white');
+    
+    // 7. ENDGAME: Defensive (stop enemy promotion)
+    evaluation += evaluateDefensiveEndgame(boardState, player);
+    
+    // Piece square tables
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row][col];
@@ -1726,17 +1995,21 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             }
         }
     }
-
+    
+    // Center control
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r][c];
-        if (piece) evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
+        if (piece) {
+            evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
+        }
     }
-
+    
+    // Mobility
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 5;
-
+    
     return evaluation;
 }
 
@@ -1932,17 +2205,6 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
     return bestScore;
 }
 
-function isEndgamePosition() {
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') pieceCount++;
-        }
-    }
-    return pieceCount <= 10;
-}
-
 function findBestMoveWithSearch() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
@@ -2020,7 +2282,7 @@ function findBestMove() {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         findBestMove,
-        evaluatePosition: evaluatePositionEnhanced,
+        evaluatePosition: evaluatePositionForSearch,
         getAllPossibleMoves,
         isKingInCheck,
         pieceMap,

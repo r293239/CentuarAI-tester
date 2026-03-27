@@ -1,6 +1,6 @@
 // chess-game.js - v2.3
 // Main chess game logic with enhanced AI and proper opening play
-// VERSION: 2.3 - Complete Endgame Knowledge + Aggressive King + Pawn Promotion Priority
+// VERSION: 2.3 - Fixed pawn bug + Worst-case move safety + 6-ply depth
 
 const GAME_VERSION = "2.3";
 
@@ -120,18 +120,18 @@ const PIECE_SQUARE_TABLES = {
 
 // ========== ENHANCED AI SEARCH CONFIGURATION ==========
 const SEARCH_CONFIG = {
-    baseDepth: 3,
-    endgameDepth: 5,
-    maxNodes: 100000,
+    baseDepth: 6,           // 6 moves ahead for smarter play
+    endgameDepth: 8,        // 8 moves in endgame
+    maxNodes: 200000,
     useQuiescence: true,
     useTransposition: true,
-    killerMoves: 3,
+    killerMoves: 5,
     historyHeuristic: true
 };
 
 // ========== TRANSPOSITION TABLE ==========
 class TranspositionTable {
-    constructor(maxSize = 500000) {
+    constructor(maxSize = 1000000) {
         this.table = new Map();
         this.maxSize = maxSize;
         this.hits = 0;
@@ -197,7 +197,7 @@ class TranspositionTable {
 
 // ========== GLOBAL SEARCH VARIABLES ==========
 let transpositionTable = new TranspositionTable();
-let killerMovesArray = new Array(10).fill().map(() => []);
+let killerMovesArray = new Array(20).fill().map(() => []);
 let historyTable = new Array(64).fill().map(() => new Array(64).fill(0));
 let searchStats = {
     nodesEvaluated: 0,
@@ -206,329 +206,13 @@ let searchStats = {
     maxDepthReached: 0
 };
 
-// ========== ENDGAME KNOWLEDGE FUNCTIONS ==========
-
-// Check if we're in endgame
-function isEndgamePosition() {
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                pieceCount++;
-            }
-        }
-    }
-    return pieceCount <= 10;
-}
-
-function isEndgamePositionForPosition(boardState) {
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                pieceCount++;
-            }
-        }
-    }
-    return pieceCount <= 10;
-}
-
-// Check if it's a pure pawn endgame (only kings and pawns)
-function isPurePawnEndgame(boardState) {
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚' && piece !== '♙' && piece !== '♟') {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-// SQUARE OF THE PAWN RULE - Can king catch the pawn?
-function canKingCatchPawn(boardState, pawnRow, pawnCol, pawnColor) {
-    const kingSymbol = pawnColor === 'white' ? '♚' : '♔';
-    let kingRow = -1, kingCol = -1;
-    
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === kingSymbol) {
-                kingRow = row; kingCol = col;
-                break;
-            }
-        }
-        if (kingRow !== -1) break;
-    }
-    
-    if (kingRow === -1) return false;
-    
-    const promotionRow = pawnColor === 'white' ? 0 : 7;
-    const pawnDistanceToPromotion = Math.abs(pawnRow - promotionRow);
-    const kingDistanceToPawn = Math.abs(kingRow - pawnRow) + Math.abs(kingCol - pawnCol);
-    
-    // If it's the pawn's turn, subtract 1 from distance
-    const pawnTurn = currentPlayer === pawnColor;
-    const effectiveKingDistance = pawnTurn ? kingDistanceToPawn : kingDistanceToPawn - 1;
-    
-    return effectiveKingDistance <= pawnDistanceToPromotion;
-}
-
-// Check if a pawn is passed
-function isPassedPawn(boardState, row, col, player) {
-    const enemyPawn = player === 'white' ? '♟' : '♙';
-    const direction = player === 'white' ? -1 : 1;
-    
-    for (let r = row + direction; r >= 0 && r < 8; r += direction) {
-        for (let c = Math.max(0, col - 1); c <= Math.min(7, col + 1); c++) {
-            if (boardState[r][c] === enemyPawn) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-// King opposition evaluation
-function evaluateKingOpposition(boardState, player) {
-    const isEndgame = isEndgamePositionForPosition(boardState);
-    if (!isEndgame) return 0;
-    
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    const enemyKingSymbol = player === 'white' ? '♚' : '♔';
-    
-    let kingRow = -1, kingCol = -1;
-    let enemyRow = -1, enemyCol = -1;
-    
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === kingSymbol) {
-                kingRow = row; kingCol = col;
-            }
-            if (boardState[row][col] === enemyKingSymbol) {
-                enemyRow = row; enemyCol = col;
-            }
-        }
-    }
-    
-    if (kingRow === -1 || enemyRow === -1) return 0;
-    
-    let score = 0;
-    
-    // Direct opposition
-    if (Math.abs(kingRow - enemyRow) === 0 && Math.abs(kingCol - enemyCol) === 2) {
-        score += 150;
-    }
-    // Diagonal opposition
-    if (Math.abs(kingRow - enemyRow) === 1 && Math.abs(kingCol - enemyCol) === 1) {
-        score += 80;
-    }
-    // Distant opposition
-    if (Math.abs(kingRow - enemyRow) === 0 && Math.abs(kingCol - enemyCol) === 4) {
-        score += 60;
-    }
-    
-    return score;
-}
-
-// ========== MASSIVELY ENHANCED ENDGAME EVALUATION ==========
-function evaluateEndgameKingActivityForPosition(boardState, player) {
-    let score = 0;
-    const isEndgame = isEndgamePositionForPosition(boardState);
-    if (!isEndgame) return 0;
-
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    let kingRow = -1, kingCol = -1;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === kingSymbol) {
-                kingRow = row; kingCol = col;
-                break;
-            }
-        }
-        if (kingRow !== -1) break;
-    }
-    if (kingRow === -1) return 0;
-
-    const opponentColor = player === 'white' ? 'black' : 'white';
-    
-    // ========== KING CAPTURES UNDEFENDED PIECES - MASSIVE BONUS ==========
-    for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-            if (dr === 0 && dc === 0) continue;
-            const nr = kingRow + dr;
-            const nc = kingCol + dc;
-            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
-                const target = boardState[nr][nc];
-                if (target && !isPlayerPieceForPosition(target, player)) {
-                    const isDefended = isPieceDefendedForPosition(boardState, nr, nc, opponentColor);
-                    if (!isDefended) {
-                        // KING TAKES UNDEFENDED PIECE - HUGE BONUS
-                        score += 1000;
-                    } else {
-                        // Even defended pieces can be taken if value is low
-                        const targetValue = PIECE_VALUES[target] || 0;
-                        if (targetValue <= 300) {
-                            score += 400;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // King centralization bonus - move towards center
-    const centerDistance = Math.abs(3.5 - kingRow) + Math.abs(3.5 - kingCol);
-    score += (14 - centerDistance) * 30;
-    
-    // King moving towards enemy king (aggression)
-    let enemyKingRow = -1, enemyKingCol = -1;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === (player === 'white' ? '♚' : '♔')) {
-                enemyKingRow = row; enemyKingCol = col;
-                break;
-            }
-        }
-        if (enemyKingRow !== -1) break;
-    }
-    
-    if (enemyKingRow !== -1) {
-        const distanceToEnemyKing = Math.abs(kingRow - enemyKingRow) + Math.abs(kingCol - enemyKingCol);
-        score += (14 - distanceToEnemyKing) * 20;
-    }
-    
-    // King moving towards enemy pawns
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
-            if (piece === (player === 'white' ? '♟' : '♙')) {
-                const distanceToPawn = Math.abs(kingRow - row) + Math.abs(kingCol - col);
-                score += (14 - distanceToPawn) * 15;
-            }
-        }
-    }
-    
-    // King opposition in pawn endgames
-    if (isPurePawnEndgame(boardState)) {
-        score += evaluateKingOpposition(boardState, player);
-    }
-    
-    return score;
-}
-
-// ========== MASSIVELY ENHANCED PAWN PROMOTION EVALUATION ==========
-function evaluatePawnPromotionForPosition(boardState, player) {
-    let score = 0;
-    const pawnColor = player === 'white' ? '♙' : '♟';
-    const promotionRow = player === 'white' ? 0 : 7;
-    const direction = player === 'white' ? -1 : 1;
-    
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === pawnColor) {
-                const distanceToPromotion = Math.abs(row - promotionRow);
-                
-                // HUGE BONUS for being close to promotion
-                if (distanceToPromotion === 1) {
-                    score += 800; // One step away from promotion!
-                } else if (distanceToPromotion === 2) {
-                    score += 400;
-                } else if (distanceToPromotion === 3) {
-                    score += 200;
-                } else {
-                    score += (7 - distanceToPromotion) * 50;
-                }
-                
-                // Check if pawn is blocked
-                const nextRow = row + direction;
-                const isBlocked = nextRow >= 0 && nextRow < 8 && boardState[nextRow][col];
-                if (!isBlocked) {
-                    score += 50; // Unblocked pawn
-                }
-                
-                // Check if pawn is passed
-                const isPassed = isPassedPawn(boardState, row, col, player);
-                if (isPassed) {
-                    score += 300; // Passed pawn bonus
-                    
-                    // Rule of the Square - check if king can catch
-                    const kingCanCatch = canKingCatchPawn(boardState, row, col, player);
-                    if (!kingCanCatch) {
-                        score += 500; // Unstoppable passed pawn!
-                    }
-                }
-                
-                // Check if pawn can capture to advance
-                for (const dc of [-1, 1]) {
-                    const captureRow = row + direction;
-                    const captureCol = col + dc;
-                    if (captureRow >= 0 && captureRow < 8 && captureCol >= 0 && captureCol < 8) {
-                        const target = boardState[captureRow][captureCol];
-                        if (target && isPlayerPieceForPosition(target, player === 'white' ? 'black' : 'white')) {
-                            score += 150; // Can capture to advance
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return score;
-}
-
-// ========== DEFENSIVE ENDGAME - STOP ENEMY PROMOTION ==========
-function evaluateDefensiveEndgame(boardState, player) {
-    let score = 0;
-    const isEndgame = isEndgamePositionForPosition(boardState);
-    if (!isEndgame) return 0;
-    
-    const opponentColor = player === 'white' ? 'black' : 'white';
-    const enemyPawn = player === 'white' ? '♟' : '♙';
-    const promotionRow = player === 'white' ? 0 : 7;
-    
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === enemyPawn) {
-                const distanceToPromotion = Math.abs(row - promotionRow);
-                
-                // Enemy pawn close to promotion - BIG PENALTY
-                if (distanceToPromotion === 1) {
-                    score -= 600;
-                } else if (distanceToPromotion === 2) {
-                    score -= 300;
-                } else if (distanceToPromotion === 3) {
-                    score -= 150;
-                }
-                
-                // Check if enemy pawn is passed
-                const isPassed = isPassedPawn(boardState, row, col, opponentColor);
-                if (isPassed) {
-                    score -= 200;
-                    
-                    // Check if our king can catch it
-                    const kingCanCatch = canKingCatchPawn(boardState, row, col, opponentColor);
-                    if (!kingCanCatch) {
-                        score -= 400; // Unstoppable enemy passed pawn!
-                    }
-                }
-            }
-        }
-    }
-    return score;
-}
-
 // ========== DISPLAY VERSION ==========
 function displayVersion() {
-    console.log(`♔ Chess Game v${GAME_VERSION} - COMPLETE ENDGAME MASTERY`);
-    console.log("👑 King Aggression: +1000 bonus for capturing undefended pieces");
-    console.log("♙ Pawn Priority: +800 bonus for pawns one step from promotion");
-    console.log("📐 Rule of the Square: Prevents enemy pawn promotion");
-    console.log("🎯 Passed Pawn Bonus: +300 for passed pawns, +500 for unstoppable");
-    console.log("⚔️ King Opposition: +150 for direct opposition");
-    console.log("💾 Transposition Table: 500,000 positions cached");
-    console.log("🔍 Search depth: 3 moves (5 in endgame)");
+    console.log(`♔ Chess Game v${GAME_VERSION} - MASTER AI with 6-Ply Depth + Safety First`);
+    console.log("🔍 Search depth: 6 moves (8 in endgame) with alpha-beta pruning");
+    console.log("🛡️ Safety First: AI evaluates worst-case opponent responses");
+    console.log("🐛 Fixed: Pawns can no longer jump over pieces");
+    console.log("💾 Transposition Table: 1,000,000 positions cached");
     console.log("📝 Professional chess notation (SAN) enabled");
 
     const versionDisplay = document.getElementById('ai-version');
@@ -542,7 +226,7 @@ window.addEventListener('load', function() {
     if (typeof ChessAILearner !== 'undefined') {
         enhancedAI = new ChessAILearner();
         loadGameHistory();
-        console.log(`🧠 Enhanced AI v${enhancedAI.version} loaded with Complete Endgame Knowledge!`);
+        console.log(`🧠 Enhanced AI v${enhancedAI.version} loaded with 6-Ply Depth + Safety!`);
     } else {
         console.log("ChessAILearner not found, using basic AI");
     }
@@ -553,44 +237,10 @@ window.addEventListener('load', function() {
     changeGameMode();
     displayVersion();
 
-    console.log("♔ Chess Game Loaded - COMPLETE ENDGAME MASTERY! ♛");
-    console.log("👑 King will now aggressively capture undefended pieces!");
-    console.log("♙ Pawns will race to promotion with massive bonuses!");
+    console.log("♔ Chess Game Loaded - MASTER AI with Safety First & 6-Ply Depth! ♛");
 });
 
-// Load game history from session storage
-function loadGameHistory() {
-    try {
-        const history = JSON.parse(sessionStorage.getItem('chess_ai_history') || '{"games": []}');
-        if (history.learningData && enhancedAI) {
-            enhancedAI.importLearningData(history.learningData);
-            updateAIStatsDisplay(history);
-        }
-    } catch (e) {
-        console.log("No previous game history found, starting fresh");
-    }
-}
-
-// Save game to history
-function saveGameToHistory(gameData) {
-    try {
-        const history = JSON.parse(sessionStorage.getItem('chess_ai_history') || '{"games": []}');
-        history.games = history.games || [];
-        history.games.push(gameData);
-        history.metadata = {
-            ...history.metadata,
-            lastUpdated: new Date().toISOString(),
-            totalGames: history.games.length
-        };
-        if (enhancedAI) {
-            history.learningData = enhancedAI.exportLearningData();
-        }
-        sessionStorage.setItem('chess_ai_history', JSON.stringify(history));
-    } catch (e) {
-        console.warn("Could not save game history:", e);
-    }
-}
-
+// ========== BOARD CREATION AND HANDLING ==========
 function createBoard() {
     const boardElement = document.getElementById('chessboard');
     if (!boardElement) return;
@@ -631,7 +281,6 @@ function createBoard() {
 
 function handleSquareClick(row, col) {
     if (gameOver || isThinking) return;
-
     if (gameMode === 'ai' && currentPlayer !== humanPlayer) return;
 
     const piece = board[row][col];
@@ -707,8 +356,31 @@ function isPlayerPiece(piece, player) {
     if (!piece) return false;
     const whitePieces = ['♔', '♕', '♖', '♗', '♘', '♙'];
     const blackPieces = ['♚', '♛', '♜', '♝', '♞', '♟'];
-
     return player === 'white' ? whitePieces.includes(piece) : blackPieces.includes(piece);
+}
+
+// ========== FIXED PAWN MOVE VALIDATION ==========
+function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
+    const direction = piece === 'P' ? -1 : 1;
+    const startRow = piece === 'P' ? 6 : 1;
+    const absDx = Math.abs(dx);
+    
+    // Moving forward
+    if (dx === 0) {
+        // One square forward
+        if (dy === direction && !board[toRow][toCol]) return true;
+        // Two squares forward from start position - MUST have both squares empty
+        if (fromRow === startRow && dy === 2 * direction) {
+            const middleRow = fromRow + direction;
+            if (middleRow >= 0 && middleRow < 8 && !board[toRow][toCol] && !board[middleRow][toCol]) return true;
+        }
+    } 
+    // Capturing diagonally
+    else if (absDx === 1 && dy === direction) {
+        if (board[toRow][toCol]) return true;
+        if (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col) return true;
+    }
+    return false;
 }
 
 function isValidMove(fromRow, fromCol, toRow, toCol) {
@@ -754,24 +426,6 @@ function isValidPieceMove(piece, fromRow, fromCol, toRow, toCol) {
     }
 }
 
-function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
-    const direction = piece === 'P' ? -1 : 1;
-    const startRow = piece === 'P' ? 6 : 1;
-    const absDx = Math.abs(dx);
-
-    if (dx === 0) {
-        if (dy === direction && !board[toRow][toCol]) return true;
-        if (fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) return true;
-    } else if (absDx === 1 && dy === direction) {
-        if (board[toRow][toCol]) return true;
-        if (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 function isPathClear(fromRow, fromCol, toRow, toCol) {
     const dx = Math.sign(toCol - fromCol);
     const dy = Math.sign(toRow - fromRow);
@@ -783,7 +437,6 @@ function isPathClear(fromRow, fromCol, toRow, toCol) {
         currentRow += dy;
         currentCol += dx;
     }
-
     return true;
 }
 
@@ -846,7 +499,6 @@ function canCastle(fromRow, fromCol, toRow, toCol) {
             if (inCheck) return false;
         }
     }
-
     return true;
 }
 
@@ -866,7 +518,6 @@ function isKingInCheck(testBoard, player) {
     }
 
     if (kingRow === -1) return false;
-
     return isSquareAttacked(testBoard, kingRow, kingCol, player === 'white' ? 'black' : 'white');
 }
 
@@ -921,12 +572,10 @@ function isPathClearOnBoard(testBoard, fromRow, fromCol, toRow, toCol) {
         currentRow += dy;
         currentCol += dx;
     }
-
     return true;
 }
 
 // ========== PROFESSIONAL CHESS NOTATION (SAN) ==========
-
 function getPieceLetterForSAN(piece) {
     const letters = {
         '♔': 'K', '♕': 'Q', '♖': 'R', '♗': 'B', '♘': 'N', '♙': '',
@@ -1193,8 +842,212 @@ function updateMoveHistory() {
     moveListElement.textContent = formattedMoves.join(' ');
 }
 
-// ========== ADVANCED AI FUNCTIONS ==========
+// ========== AI HELPER FUNCTIONS ==========
+function loadGameHistory() {
+    try {
+        const history = JSON.parse(sessionStorage.getItem('chess_ai_history') || '{"games": []}');
+        if (history.learningData && enhancedAI) {
+            enhancedAI.importLearningData(history.learningData);
+            updateAIStatsDisplay(history);
+        }
+    } catch (e) {
+        console.log("No previous game history found, starting fresh");
+    }
+}
 
+function saveGameToHistory(gameData) {
+    try {
+        const history = JSON.parse(sessionStorage.getItem('chess_ai_history') || '{"games": []}');
+        history.games = history.games || [];
+        history.games.push(gameData);
+        history.metadata = {
+            ...history.metadata,
+            lastUpdated: new Date().toISOString(),
+            totalGames: history.games.length
+        };
+        if (enhancedAI) {
+            history.learningData = enhancedAI.exportLearningData();
+        }
+        sessionStorage.setItem('chess_ai_history', JSON.stringify(history));
+    } catch (e) {
+        console.warn("Could not save game history:", e);
+    }
+}
+
+function updateAIStats() {
+    const gamesPlayedElement = document.getElementById('games-played');
+    const winRateElement = document.getElementById('win-rate');
+    const difficultyElement = document.getElementById('ai-difficulty');
+    const versionElement = document.getElementById('ai-version');
+
+    if (!gamesPlayedElement || !winRateElement) return;
+
+    if (enhancedAI) {
+        const winRate = enhancedAI.getWinRate();
+        const gamesPlayed = enhancedAI.performanceHistory.length;
+
+        gamesPlayedElement.textContent = gamesPlayed;
+        winRateElement.textContent = `${winRate}%`;
+        if (difficultyElement) difficultyElement.textContent = 'MASTER (2200)';
+        if (versionElement) versionElement.textContent = `v${enhancedAI.version}`;
+    } else {
+        gamesPlayedElement.textContent = '0';
+        winRateElement.textContent = '50%';
+        if (difficultyElement) difficultyElement.textContent = 'MASTER';
+        if (versionElement) versionElement.textContent = 'v2.3';
+    }
+}
+
+function updateAIStatsDisplay(historyData) {
+    if (historyData.metadata) {
+        const gamesPlayedElement = document.getElementById('games-played');
+        const winRateElement = document.getElementById('win-rate');
+        const difficultyElement = document.getElementById('ai-difficulty');
+        const versionElement = document.getElementById('ai-version');
+        
+        if (gamesPlayedElement) gamesPlayedElement.textContent = historyData.metadata.totalGames || 0;
+        if (historyData.learningData && historyData.learningData.winRate && winRateElement) {
+            winRateElement.textContent = `${historyData.learningData.winRate}%`;
+        }
+        if (difficultyElement) difficultyElement.textContent = 'MASTER (2200)';
+        if (versionElement && historyData.learningData && historyData.learningData.version) {
+            versionElement.textContent = `v${historyData.learningData.version}`;
+        }
+    }
+}
+
+function updateAIGameResult(result) {
+    if (enhancedAI) {
+        const gameData = {
+            result: result,
+            playerColors: { ai: humanPlayer === 'white' ? 'black' : 'white' },
+            moves: moveHistory,
+            difficulty: enhancedAI.difficulty
+        };
+        enhancedAI.learnFromGame(gameData);
+
+        saveGameToHistory({
+            timestamp: new Date().toISOString(),
+            result: result,
+            moves: moveHistory,
+            aiColor: humanPlayer === 'white' ? 'black' : 'white',
+            humanColor: humanPlayer,
+            gameLength: moveHistory.length,
+            opening: enhancedAI.analyzeOpening(moveHistory) || 'Unknown',
+            version: GAME_VERSION
+        });
+    }
+    updateAIStats();
+}
+
+function newGame() {
+    board = [
+        ['♜', '♞', '♝', '♛', '♚', '♝', '♞', '♜'],
+        ['♟', '♟', '♟', '♟', '♟', '♟', '♟', '♟'],
+        ['', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', ''],
+        ['♙', '♙', '♙', '♙', '♙', '♙', '♙', '♙'],
+        ['♖', '♘', '♗', '♕', '♔', '♗', '♘', '♖']
+    ];
+
+    currentPlayer = 'white';
+    selectedSquare = null;
+    gameHistory = [];
+    moveHistory = [];
+    gameOver = false;
+    moveCount = 1;
+    halfMoveCount = 0;
+    lastMove = null;
+    isThinking = false;
+
+    castlingRights = {
+        whiteKingside: true,
+        whiteQueenside: true,
+        blackKingside: true,
+        blackQueenside: true
+    };
+
+    enPassantTarget = null;
+    
+    transpositionTable.clear();
+    killerMovesArray = new Array(20).fill().map(() => []);
+    historyTable = new Array(64).fill().map(() => new Array(64).fill(0));
+
+    createBoard();
+    updateStatus();
+
+    const moveListElement = document.getElementById('move-list');
+    if (moveListElement) moveListElement.textContent = 'Game started';
+
+    const thinkingElement = document.getElementById('thinking');
+    const syncStatusElement = document.getElementById('sync-status');
+
+    if (thinkingElement) thinkingElement.style.display = 'none';
+    if (syncStatusElement) {
+        syncStatusElement.textContent = 'Ready';
+        syncStatusElement.classList.remove('thinking');
+    }
+
+    console.log("🎯 New game started! AI v2.3 with 6-Ply Depth + Safety First!");
+}
+
+function undoMove() {
+    if (gameHistory.length === 0) return;
+
+    const previousState = gameHistory.pop();
+    board = previousState.board;
+    currentPlayer = previousState.currentPlayer;
+    moveHistory = previousState.moveHistory;
+    moveCount = previousState.moveCount;
+    halfMoveCount = previousState.halfMoveCount;
+    castlingRights = previousState.castlingRights;
+    lastMove = previousState.lastMove;
+    enPassantTarget = previousState.enPassantTarget;
+    gameOver = false;
+
+    createBoard();
+    updateStatus();
+    updateMoveHistory();
+
+    const statusElement = document.getElementById('status');
+    if (statusElement) {
+        statusElement.classList.remove('checkmate', 'check');
+    }
+}
+
+function switchSides() {
+    humanPlayer = humanPlayer === 'white' ? 'black' : 'white';
+    console.log(`🔄 Switched sides. You are now playing as ${humanPlayer}`);
+
+    if (gameMode === 'ai' && currentPlayer !== humanPlayer && !gameOver) {
+        setTimeout(makeAIMove, 500);
+    }
+}
+
+function changeGameMode() {
+    const gameModeSelect = document.getElementById('gameMode');
+    const gameModeDisplay = document.getElementById('game-mode-display');
+    const aiInfo = document.getElementById('ai-info');
+
+    if (!gameModeSelect || !gameModeDisplay) return;
+
+    gameMode = gameModeSelect.value;
+
+    if (gameMode === 'ai') {
+        gameModeDisplay.textContent = 'vs AI (Master)';
+        if (aiInfo) aiInfo.style.display = 'block';
+        if (currentPlayer !== humanPlayer && !gameOver) {
+            setTimeout(makeAIMove, 500);
+        }
+    } else {
+        gameModeDisplay.textContent = 'vs Player';
+        if (aiInfo) aiInfo.style.display = 'none';
+    }
+}
+
+// ========== AI MOVE FUNCTIONS ==========
 function isPieceDefended(pieceRow, pieceCol, defenderColor) {
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
@@ -1454,181 +1307,7 @@ function evaluatePosition() {
     return evaluatePositionEnhanced();
 }
 
-function updateAIStats() {
-    const gamesPlayedElement = document.getElementById('games-played');
-    const winRateElement = document.getElementById('win-rate');
-    const difficultyElement = document.getElementById('ai-difficulty');
-    const versionElement = document.getElementById('ai-version');
-
-    if (!gamesPlayedElement || !winRateElement) return;
-
-    if (enhancedAI) {
-        const winRate = enhancedAI.getWinRate();
-        const gamesPlayed = enhancedAI.performanceHistory.length;
-
-        gamesPlayedElement.textContent = gamesPlayed;
-        winRateElement.textContent = `${winRate}%`;
-        if (difficultyElement) difficultyElement.textContent = 'MASTER (2200)';
-        if (versionElement) versionElement.textContent = `v${enhancedAI.version}`;
-    } else {
-        gamesPlayedElement.textContent = '0';
-        winRateElement.textContent = '50%';
-        if (difficultyElement) difficultyElement.textContent = 'MASTER';
-        if (versionElement) versionElement.textContent = 'v2.3';
-    }
-}
-
-function updateAIStatsDisplay(historyData) {
-    if (historyData.metadata) {
-        const gamesPlayedElement = document.getElementById('games-played');
-        const winRateElement = document.getElementById('win-rate');
-        const difficultyElement = document.getElementById('ai-difficulty');
-        const versionElement = document.getElementById('ai-version');
-        
-        if (gamesPlayedElement) gamesPlayedElement.textContent = historyData.metadata.totalGames || 0;
-        if (historyData.learningData && historyData.learningData.winRate && winRateElement) {
-            winRateElement.textContent = `${historyData.learningData.winRate}%`;
-        }
-        if (difficultyElement) difficultyElement.textContent = 'MASTER (2200)';
-        if (versionElement && historyData.learningData && historyData.learningData.version) {
-            versionElement.textContent = `v${historyData.learningData.version}`;
-        }
-    }
-}
-
-function updateAIGameResult(result) {
-    if (enhancedAI) {
-        const gameData = {
-            result: result,
-            playerColors: { ai: humanPlayer === 'white' ? 'black' : 'white' },
-            moves: moveHistory,
-            difficulty: enhancedAI.difficulty
-        };
-        enhancedAI.learnFromGame(gameData);
-
-        saveGameToHistory({
-            timestamp: new Date().toISOString(),
-            result: result,
-            moves: moveHistory,
-            aiColor: humanPlayer === 'white' ? 'black' : 'white',
-            humanColor: humanPlayer,
-            gameLength: moveHistory.length,
-            opening: enhancedAI.analyzeOpening(moveHistory) || 'Unknown',
-            version: GAME_VERSION
-        });
-    }
-    updateAIStats();
-}
-
-function newGame() {
-    board = [
-        ['♜', '♞', '♝', '♛', '♚', '♝', '♞', '♜'],
-        ['♟', '♟', '♟', '♟', '♟', '♟', '♟', '♟'],
-        ['', '', '', '', '', '', '', ''],
-        ['', '', '', '', '', '', '', ''],
-        ['', '', '', '', '', '', '', ''],
-        ['', '', '', '', '', '', '', ''],
-        ['♙', '♙', '♙', '♙', '♙', '♙', '♙', '♙'],
-        ['♖', '♘', '♗', '♕', '♔', '♗', '♘', '♖']
-    ];
-
-    currentPlayer = 'white';
-    selectedSquare = null;
-    gameHistory = [];
-    moveHistory = [];
-    gameOver = false;
-    moveCount = 1;
-    halfMoveCount = 0;
-    lastMove = null;
-    isThinking = false;
-
-    castlingRights = {
-        whiteKingside: true,
-        whiteQueenside: true,
-        blackKingside: true,
-        blackQueenside: true
-    };
-
-    enPassantTarget = null;
-    
-    // Clear transposition table for new game
-    transpositionTable.clear();
-    killerMovesArray = new Array(10).fill().map(() => []);
-    historyTable = new Array(64).fill().map(() => new Array(64).fill(0));
-
-    createBoard();
-    updateStatus();
-
-    const moveListElement = document.getElementById('move-list');
-    if (moveListElement) moveListElement.textContent = 'Game started';
-
-    const thinkingElement = document.getElementById('thinking');
-    const syncStatusElement = document.getElementById('sync-status');
-
-    if (thinkingElement) thinkingElement.style.display = 'none';
-    if (syncStatusElement) {
-        syncStatusElement.textContent = 'Ready';
-        syncStatusElement.classList.remove('thinking');
-    }
-
-    console.log("🎯 New game started! AI v2.3 with Complete Endgame Mastery!");
-}
-
-function undoMove() {
-    if (gameHistory.length === 0) return;
-
-    const previousState = gameHistory.pop();
-    board = previousState.board;
-    currentPlayer = previousState.currentPlayer;
-    moveHistory = previousState.moveHistory;
-    moveCount = previousState.moveCount;
-    halfMoveCount = previousState.halfMoveCount;
-    castlingRights = previousState.castlingRights;
-    lastMove = previousState.lastMove;
-    enPassantTarget = previousState.enPassantTarget;
-    gameOver = false;
-
-    createBoard();
-    updateStatus();
-    updateMoveHistory();
-
-    const statusElement = document.getElementById('status');
-    if (statusElement) {
-        statusElement.classList.remove('checkmate', 'check');
-    }
-}
-
-function switchSides() {
-    humanPlayer = humanPlayer === 'white' ? 'black' : 'white';
-    console.log(`🔄 Switched sides. You are now playing as ${humanPlayer}`);
-
-    if (gameMode === 'ai' && currentPlayer !== humanPlayer && !gameOver) {
-        setTimeout(makeAIMove, 500);
-    }
-}
-
-function changeGameMode() {
-    const gameModeSelect = document.getElementById('gameMode');
-    const gameModeDisplay = document.getElementById('game-mode-display');
-    const aiInfo = document.getElementById('ai-info');
-
-    if (!gameModeSelect || !gameModeDisplay) return;
-
-    gameMode = gameModeSelect.value;
-
-    if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (Master)';
-        if (aiInfo) aiInfo.style.display = 'block';
-        if (currentPlayer !== humanPlayer && !gameOver) {
-            setTimeout(makeAIMove, 500);
-        }
-    } else {
-        gameModeDisplay.textContent = 'vs Player';
-        if (aiInfo) aiInfo.style.display = 'none';
-    }
-}
-
-// ========== ENHANCED SEARCH FUNCTIONS ==========
+// ========== POSITION EVALUATION FOR SEARCH ==========
 function isPlayerPieceForPosition(piece, player) {
     if (!piece) return false;
     const whitePieces = ['♔', '♕', '♖', '♗', '♘', '♙'];
@@ -1749,7 +1428,10 @@ function isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, play
             const startRow = pieceCode === 'P' ? 6 : 1;
             if (dx === 0) {
                 if (dy === direction && !boardState[toRow][toCol]) valid = true;
-                if (fromRow === startRow && dy === 2 * direction && !boardState[toRow][toCol]) valid = true;
+                if (fromRow === startRow && dy === 2 * direction) {
+                    const middleRow = fromRow + direction;
+                    if (!boardState[toRow][toCol] && !boardState[middleRow][toCol]) valid = true;
+                }
             } else if (absDx === 1 && dy === direction && boardState[toRow][toCol]) {
                 valid = true;
             }
@@ -1802,6 +1484,32 @@ function getAllPossibleMovesForPosition(boardState, player) {
         }
     }
     return moves;
+}
+
+function isEndgamePositionForPosition(boardState) {
+    let pieceCount = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row][col];
+            if (piece && piece !== '♔' && piece !== '♚') {
+                pieceCount++;
+            }
+        }
+    }
+    return pieceCount <= 10;
+}
+
+function isEndgamePosition() {
+    let pieceCount = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = board[row][col];
+            if (piece && piece !== '♔' && piece !== '♚') {
+                pieceCount++;
+            }
+        }
+    }
+    return pieceCount <= 10;
 }
 
 function getPieceMovesForPosition(boardState, fromRow, fromCol, player) {
@@ -1946,10 +1654,46 @@ function evaluateCastlingPriorityForPosition(boardState, player, moveNumber) {
     return score;
 }
 
+function evaluateEndgameKingActivityForPosition(boardState, player) {
+    let score = 0;
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    if (!isEndgame) return 0;
+
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    let kingRow = -1, kingCol = -1;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row][col] === kingSymbol) {
+                kingRow = row; kingCol = col; break;
+            }
+        }
+        if (kingRow !== -1) break;
+    }
+    if (kingRow === -1) return 0;
+
+    const centerDistance = Math.abs(3.5 - kingRow) + Math.abs(3.5 - kingCol);
+    score += (14 - centerDistance) * 15;
+
+    const opponentColor = player === 'white' ? 'black' : 'white';
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = kingRow + dr, nc = kingCol + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                const target = boardState[nr][nc];
+                if (target && !isPlayerPieceForPosition(target, player) && target !== (player === 'white' ? '♚' : '♔')) {
+                    const isDefended = isPieceDefendedForPosition(boardState, nr, nc, opponentColor);
+                    if (!isDefended) score += 500;
+                }
+            }
+        }
+    }
+    return score;
+}
+
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     let evaluation = 0;
-    
-    // Material balance
+
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row][col];
@@ -1959,33 +1703,16 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             }
         }
     }
-    
-    // 1. Material Focus (capture opportunities)
+
     evaluation += evaluateMaterialFocusForPosition(boardState, player) * 0.1;
-    
-    // 2. Pawn Formation
     evaluation += evaluatePawnFormationForPosition(boardState, player) * 0.05;
     evaluation -= evaluatePawnFormationForPosition(boardState, player === 'white' ? 'black' : 'white') * 0.05;
-    
-    // 3. Safe Squares
     evaluation += evaluateSafeSquaresForPosition(boardState, player) * 0.08;
     evaluation -= evaluateSafeSquaresForPosition(boardState, player === 'white' ? 'black' : 'white') * 0.08;
-    
-    // 4. Castling Priority
     evaluation += evaluateCastlingPriorityForPosition(boardState, player, moveNumber) * 0.1;
-    
-    // 5. ENDGAME: Aggressive King Activity
     evaluation += evaluateEndgameKingActivityForPosition(boardState, player);
     evaluation -= evaluateEndgameKingActivityForPosition(boardState, player === 'white' ? 'black' : 'white');
-    
-    // 6. ENDGAME: Pawn Promotion
-    evaluation += evaluatePawnPromotionForPosition(boardState, player);
-    evaluation -= evaluatePawnPromotionForPosition(boardState, player === 'white' ? 'black' : 'white');
-    
-    // 7. ENDGAME: Defensive (stop enemy promotion)
-    evaluation += evaluateDefensiveEndgame(boardState, player);
-    
-    // Piece square tables
+
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row][col];
@@ -1995,136 +1722,114 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             }
         }
     }
-    
-    // Center control
+
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r][c];
-        if (piece) {
-            evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
-        }
+        if (piece) evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
     }
-    
-    // Mobility
+
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 5;
-    
+
     return evaluation;
 }
 
-function getBoardHashForPosition(boardState, player) {
-    let hash = player;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
-            hash += piece || '.';
-        }
-    }
-    return hash;
-}
-
-function orderMovesForSearch(moves, boardState, player, currentDepth, hashMove) {
-    const scores = [];
-    for (const move of moves) {
-        let score = 0;
-        if (hashMove && move.fromRow === hashMove.fromRow && move.fromCol === hashMove.fromCol && 
-            move.toRow === hashMove.toRow && move.toCol === hashMove.toCol) {
-            score += 100000;
-        }
-        const target = boardState[move.toRow][move.toCol];
-        const attacker = boardState[move.fromRow][move.fromCol];
-        if (target) {
-            score += (PIECE_VALUES[target] || 0) * 100 - (PIECE_VALUES[attacker] || 0);
-        }
-        const killers = killerMovesArray[currentDepth] || [];
-        if (killers.some(k => k.fromRow === move.fromRow && k.fromCol === move.fromCol && 
-                              k.toRow === move.toRow && k.toCol === move.toCol)) {
-            score += 50000;
-        }
-        if (SEARCH_CONFIG.historyHeuristic) {
-            const history = historyTable[move.fromRow * 8 + move.fromCol][move.toRow * 8 + move.toCol];
-            score += history;
-        }
-        const piece = boardState[move.fromRow][move.fromCol];
-        if ((piece === '♙' && move.toRow === 0) || (piece === '♟' && move.toRow === 7)) {
-            score += 30000;
-        }
-        const centerDist = Math.abs(move.toRow - 3.5) + Math.abs(move.toCol - 3.5);
-        score -= centerDist * 10;
-        scores.push(score);
-    }
-    return moves.map((move, i) => ({ move, score: scores[i] }))
-        .sort((a, b) => b.score - a.score)
-        .map(item => item.move);
-}
-
-function orderCapturesForSearch(captures) {
-    return captures.sort((a, b) => (b.targetValue || 0) - (a.targetValue || 0));
-}
-
-function getCaptureMovesForPosition(boardState, player) {
-    const captures = [];
+// ========== ENHANCED MOVE SAFETY EVALUATION ==========
+function evaluateMoveSafety(boardState, fromRow, fromCol, toRow, toCol, player) {
+    const piece = boardState[fromRow][fromCol];
+    const targetPiece = boardState[toRow][toCol];
+    
+    // Make the move
+    const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+    
+    let worstOutcome = 0;
+    let bestOutcome = -Infinity;
+    
+    // Check all opponent responses to this move (worst-case analysis)
     const opponentColor = player === 'white' ? 'black' : 'white';
-    for (let fromRow = 0; fromRow < 8; fromRow++) {
-        for (let fromCol = 0; fromCol < 8; fromCol++) {
-            const piece = boardState[fromRow][fromCol];
-            if (piece && isPlayerPieceForPosition(piece, player)) {
-                for (let toRow = 0; toRow < 8; toRow++) {
-                    for (let toCol = 0; toCol < 8; toCol++) {
-                        const target = boardState[toRow][toCol];
-                        if (target && isPlayerPieceForPosition(target, opponentColor)) {
-                            if (isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, player)) {
-                                captures.push({ fromRow, fromCol, toRow, toCol, targetValue: PIECE_VALUES[target] });
-                            }
-                        }
+    const opponentMoves = getAllPossibleMovesForPosition(newBoard, opponentColor);
+    
+    for (const opponentMove of opponentMoves) {
+        // Simulate opponent's response
+        const afterOpponent = makeTestMoveForPosition(newBoard, opponentMove.fromRow, opponentMove.fromCol, opponentMove.toRow, opponentMove.toCol);
+        
+        // Evaluate resulting position from player's perspective
+        let positionScore = evaluatePositionForSearch(afterOpponent, player, 0);
+        
+        // Track worst outcome (what opponent can do to us)
+        if (positionScore < worstOutcome) {
+            worstOutcome = positionScore;
+        }
+        // Track best outcome for us after opponent moves
+        if (positionScore > bestOutcome) {
+            bestOutcome = positionScore;
+        }
+    }
+    
+    // Safety score: weighted combination of worst-case and best-case
+    const safetyScore = (worstOutcome * 0.7) + (bestOutcome * 0.3);
+    
+    // Additional penalty for moving piece away from defense
+    let undefendedPenalty = 0;
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = toRow + dr;
+            const nc = toCol + dc;
+            if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+                const nearbyPiece = newBoard[nr][nc];
+                if (nearbyPiece && isPlayerPieceForPosition(nearbyPiece, player)) {
+                    const isDefended = isPieceDefendedForPosition(newBoard, nr, nc, player);
+                    if (!isDefended) {
+                        undefendedPenalty -= 200;
                     }
                 }
             }
         }
     }
-    return captures;
+    
+    return safetyScore + undefendedPenalty;
 }
 
-function quiescenceSearch(boardState, alpha, beta, isMaximizing, player, moveNumber, depth) {
-    searchStats.quiescenceNodes++;
-    let standPat = evaluatePositionForSearch(boardState, player, moveNumber);
-    if (depth === 0) return standPat;
+// ========== ORDER MOVES BY SAFETY ==========
+function orderMovesBySafety(boardState, moves, player) {
+    const moveScores = [];
     
-    if (isMaximizing) {
-        if (standPat >= beta) return beta;
-        if (standPat > alpha) alpha = standPat;
-    } else {
-        if (standPat <= alpha) return alpha;
-        if (standPat < beta) beta = standPat;
+    for (const move of moves) {
+        let score = 0;
+        
+        // Check if this is a capture
+        const target = boardState[move.toRow][move.toCol];
+        if (target) {
+            const targetValue = PIECE_VALUES[target] || 0;
+            const attackerValue = PIECE_VALUES[boardState[move.fromRow][move.fromCol]] || 0;
+            score += targetValue * 10 - attackerValue;
+        }
+        
+        // Check move safety
+        const safetyScore = evaluateMoveSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+        score += safetyScore * 0.5;
+        
+        // Promotion bonus
+        const piece = boardState[move.fromRow][move.fromCol];
+        if ((piece === '♙' && move.toRow === 0) || (piece === '♟' && move.toRow === 7)) {
+            score += 500;
+        }
+        
+        // Center control bonus
+        const centerDist = Math.abs(move.toRow - 3.5) + Math.abs(move.toCol - 3.5);
+        score -= centerDist * 2;
+        
+        moveScores.push({ move, score });
     }
     
-    const captures = getCaptureMovesForPosition(boardState, player);
-    if (captures.length === 0) return standPat;
-    const orderedCaptures = orderCapturesForSearch(captures);
-    if (depth <= 0) return standPat;
-    const nextPlayer = player === 'white' ? 'black' : 'white';
-    
-    if (isMaximizing) {
-        for (const move of orderedCaptures) {
-            const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            const score = quiescenceSearch(newBoard, alpha, beta, false, nextPlayer, moveNumber, depth - 1);
-            if (score >= beta) return beta;
-            if (score > alpha) alpha = score;
-        }
-        return alpha;
-    } else {
-        for (const move of orderedCaptures) {
-            const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            const score = quiescenceSearch(newBoard, alpha, beta, true, nextPlayer, moveNumber, depth - 1);
-            if (score <= alpha) return alpha;
-            if (score < beta) beta = score;
-        }
-        return beta;
-    }
+    return moveScores.sort((a, b) => b.score - a.score).map(item => item.move);
 }
 
-function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer, player, moveNumber, ply = 0) {
+// ========== MINIMAX WITH SAFETY ==========
+function minimaxWithSafety(boardState, depth, alpha, beta, isMaximizingPlayer, player, moveNumber, ply = 0) {
     searchStats.nodesEvaluated++;
     
     const ttScore = transpositionTable.get(boardState, player, depth, alpha, beta);
@@ -2147,30 +1852,36 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
         return score;
     }
     
-    const ttEntry = transpositionTable.table.get(transpositionTable.getHash(boardState, player));
-    const hashMove = ttEntry?.bestMove;
-    const currentDepth = SEARCH_CONFIG.baseDepth - depth;
-    const orderedMoves = orderMovesForSearch(moves, boardState, player, currentDepth, hashMove);
+    const orderedMoves = orderMovesBySafety(boardState, moves, player);
     
     let bestScore = isMaximizingPlayer ? -Infinity : Infinity;
     let bestMove = null;
-    let movesSearched = 0;
     const nextPlayer = player === 'white' ? 'black' : 'white';
     
     for (const move of orderedMoves) {
-        movesSearched++;
+        const safetyScore = evaluateMoveSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+        
+        // Skip extremely unsafe moves
+        if (safetyScore < -1000 && depth > 2) {
+            continue;
+        }
+        
         const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
         let score;
         
         if (isMaximizingPlayer) {
-            score = -minimaxWithAlphaBeta(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1, ply + 1);
+            score = -minimaxWithSafety(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1, ply + 1);
+            score += safetyScore * 0.3;
+            
             if (score > bestScore) {
                 bestScore = score;
                 bestMove = move;
             }
             alpha = Math.max(alpha, score);
         } else {
-            score = minimaxWithAlphaBeta(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, ply + 1);
+            score = minimaxWithSafety(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, ply + 1);
+            score -= safetyScore * 0.3;
+            
             if (score < bestScore) {
                 bestScore = score;
                 bestMove = move;
@@ -2178,8 +1889,9 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
             beta = Math.min(beta, score);
         }
         
-        if (SEARCH_CONFIG.killerMoves > 0 && depth === SEARCH_CONFIG.baseDepth && bestMove && !boardState[move.toRow][move.toCol]) {
-            const killers = killerMovesArray[currentDepth];
+        // Update killer moves
+        if (SEARCH_CONFIG.killerMoves > 0 && depth > 0 && bestMove && !boardState[move.toRow][move.toCol]) {
+            const killers = killerMovesArray[Math.min(SEARCH_CONFIG.baseDepth - depth, 19)];
             if (!killers.some(k => k.fromRow === bestMove.fromRow && k.fromCol === bestMove.fromCol && 
                                    k.toRow === bestMove.toRow && k.toCol === bestMove.toCol)) {
                 killers.unshift(bestMove);
@@ -2187,6 +1899,7 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
             }
         }
         
+        // Update history heuristic
         if (SEARCH_CONFIG.historyHeuristic && bestMove && !boardState[move.toRow][move.toCol]) {
             const bonus = depth * depth;
             const fromIdx = bestMove.fromRow * 8 + bestMove.fromCol;
@@ -2205,6 +1918,69 @@ function minimaxWithAlphaBeta(boardState, depth, alpha, beta, isMaximizingPlayer
     return bestScore;
 }
 
+// ========== QUESCENCE SEARCH ==========
+function quiescenceSearch(boardState, alpha, beta, isMaximizing, player, moveNumber, depth) {
+    searchStats.quiescenceNodes++;
+    let standPat = evaluatePositionForSearch(boardState, player, moveNumber);
+    if (depth === 0) return standPat;
+    
+    if (isMaximizing) {
+        if (standPat >= beta) return beta;
+        if (standPat > alpha) alpha = standPat;
+    } else {
+        if (standPat <= alpha) return alpha;
+        if (standPat < beta) beta = standPat;
+    }
+    
+    const captures = getCaptureMovesForPosition(boardState, player);
+    if (captures.length === 0) return standPat;
+    
+    const nextPlayer = player === 'white' ? 'black' : 'white';
+    
+    if (isMaximizing) {
+        for (const move of captures) {
+            const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
+            const score = quiescenceSearch(newBoard, alpha, beta, false, nextPlayer, moveNumber, depth - 1);
+            if (score >= beta) return beta;
+            if (score > alpha) alpha = score;
+        }
+        return alpha;
+    } else {
+        for (const move of captures) {
+            const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
+            const score = quiescenceSearch(newBoard, alpha, beta, true, nextPlayer, moveNumber, depth - 1);
+            if (score <= alpha) return alpha;
+            if (score < beta) beta = score;
+        }
+        return beta;
+    }
+}
+
+function getCaptureMovesForPosition(boardState, player) {
+    const captures = [];
+    const opponentColor = player === 'white' ? 'black' : 'white';
+    
+    for (let fromRow = 0; fromRow < 8; fromRow++) {
+        for (let fromCol = 0; fromCol < 8; fromCol++) {
+            const piece = boardState[fromRow][fromCol];
+            if (piece && isPlayerPieceForPosition(piece, player)) {
+                for (let toRow = 0; toRow < 8; toRow++) {
+                    for (let toCol = 0; toCol < 8; toCol++) {
+                        const target = boardState[toRow][toCol];
+                        if (target && isPlayerPieceForPosition(target, opponentColor)) {
+                            if (isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, player)) {
+                                captures.push({ fromRow, fromCol, toRow, toCol });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return captures;
+}
+
+// ========== MAIN SEARCH FUNCTION ==========
 function findBestMoveWithSearch() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
@@ -2219,43 +1995,39 @@ function findBestMoveWithSearch() {
     const isEndgame = isEndgamePosition();
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 AI searching at depth ${searchDepth} (${isEndgame ? 'endgame' : 'middlegame'})`);
+    console.log(`🔍 AI searching at depth ${searchDepth} (${isEndgame ? 'endgame' : 'middlegame'}) with Safety First`);
     const searchStartTime = performance.now();
     
     let bestScore = -Infinity;
     let bestMove = allMoves[0];
+    let bestSafetyScore = -Infinity;
     
-    for (let currentDepth = 1; currentDepth <= searchDepth; currentDepth++) {
-        let depthBestScore = -Infinity;
-        let depthBestMove = null;
+    for (const move of allMoves) {
+        const safetyScore = evaluateMoveSafety(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
         
-        const orderedMoves = orderMovesForSearch(allMoves, board, currentPlayer, 0, null);
-        
-        for (const move of orderedMoves) {
-            const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            const score = -minimaxWithAlphaBeta(newBoard, currentDepth - 1, -Infinity, Infinity, false, 
-                                                currentPlayer === 'white' ? 'black' : 'white', moveCount, 0);
-            
-            if (score > depthBestScore) {
-                depthBestScore = score;
-                depthBestMove = move;
-            }
+        // Reject completely unsafe moves
+        if (safetyScore < -500) {
+            console.log(`  ❌ Rejecting unsafe move: ${getMoveNotation(move.fromRow, move.fromCol, move.toRow, move.toCol)} (safety: ${safetyScore.toFixed(0)})`);
+            continue;
         }
         
-        if (depthBestMove) {
-            bestScore = depthBestScore;
-            bestMove = depthBestMove;
+        const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
+        const score = -minimaxWithSafety(newBoard, searchDepth - 1, -Infinity, Infinity, false, 
+                                          currentPlayer === 'white' ? 'black' : 'white', moveCount, 0);
+        
+        const totalScore = score + (safetyScore * 0.4);
+        
+        if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestMove = move;
+            bestSafetyScore = safetyScore;
         }
-        
-        console.log(`  Depth ${currentDepth}: best score = ${depthBestScore.toFixed(0)}`);
-        
-        if (depthBestScore > 19000) break;
-        if (searchStats.nodesEvaluated > SEARCH_CONFIG.maxNodes) break;
     }
     
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     const ttStats = transpositionTable.getStats();
-    console.log(`🎯 Search complete: ${searchStats.nodesEvaluated} nodes, ${searchStats.transpositionHits} TT hits (${ttStats.hitRate.toFixed(1)}%), ${searchStats.quiescenceNodes} Q-nodes`);
+    console.log(`🎯 Search complete: ${searchStats.nodesEvaluated} nodes, ${searchStats.transpositionHits} TT hits (${ttStats.hitRate.toFixed(1)}%)`);
+    console.log(`🛡️ Best move safety score: ${bestSafetyScore.toFixed(0)}`);
     console.log(`⏱️ Search time: ${searchTime}ms, Score: ${bestScore.toFixed(0)}`);
     
     return bestMove;
@@ -2278,7 +2050,7 @@ function findBestMove() {
     return findBestMoveWithSearch();
 }
 
-// Expose functions for Lichess bot compatibility
+// Expose for Lichess
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         findBestMove,

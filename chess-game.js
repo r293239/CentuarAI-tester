@@ -20,20 +20,28 @@ class PersistentMoveTree {
     }
 
     getPositionHash(board, player, castling, enPassant) {
+        // Safe check for board
+        if (!board || !Array.isArray(board)) return "empty";
+        
         let hash = player + "|";
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
-                hash += board[row][col] || ".";
+                hash += (board[row] && board[row][col]) || ".";
             }
         }
-        hash += "|" + JSON.stringify(castling) + "|" + (enPassant ? `${enPassant.row},${enPassant.col}` : "null");
+        hash += "|" + JSON.stringify(castling || {}) + "|" + (enPassant ? `${enPassant.row},${enPassant.col}` : "null");
         return hash;
     }
 
     storeMoveEvaluation(move, evaluation, depth, variations, isBestLine = false) {
         const key = this.getMoveKey(move.fromRow, move.fromCol, move.toRow, move.toCol);
-        const positionHash = this.getPositionHash(window.board || [], move.player || 'white', 
-            window.castlingRights || {}, window.enPassantTarget || null);
+        
+        // Safely get current board state
+        const currentBoard = typeof window !== 'undefined' && window.board ? window.board : null;
+        const currentCastling = typeof window !== 'undefined' && window.castlingRights ? window.castlingRights : {};
+        const currentEnPassant = typeof window !== 'undefined' && window.enPassantTarget ? window.enPassantTarget : null;
+        
+        const positionHash = this.getPositionHash(currentBoard, move.player || 'white', currentCastling, currentEnPassant);
         
         const node = {
             move,
@@ -47,7 +55,9 @@ class PersistentMoveTree {
         };
         
         this.tree.set(key, node);
-        this.positionCache.set(positionHash, node);
+        if (positionHash !== "empty") {
+            this.positionCache.set(positionHash, node);
+        }
         this.saveToStorage();
         
         return node;
@@ -57,7 +67,7 @@ class PersistentMoveTree {
         const key = this.getMoveKey(move.fromRow, move.fromCol, move.toRow, move.toCol);
         const cached = this.tree.get(key);
         
-        if (cached) {
+        if (cached && currentBoard) {
             const currentHash = this.getPositionHash(currentBoard, player, castling, enPassant);
             if (cached.positionHash === currentHash) {
                 return cached;
@@ -67,6 +77,8 @@ class PersistentMoveTree {
     }
 
     pruneInactiveLines(currentMoveSequence) {
+        if (!currentMoveSequence || currentMoveSequence.length === 0) return;
+        
         const toDelete = [];
         
         for (const [key, node] of this.tree) {
@@ -159,8 +171,8 @@ class PersistentMoveTree {
     }
 }
 
-// Initialize persistent memory system
-let moveTree = new PersistentMoveTree();
+// Initialize persistent memory system (will be fully initialized after board exists)
+let moveTree = null;
 
 // Chess board representation
 let board = [
@@ -343,7 +355,7 @@ let riskAssessor = new RiskAssessment();
 // ========== CORE GAME FUNCTIONS ==========
 
 function displayVersion() {
-    const stats = moveTree.getStats();
+    const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
     console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`🎯 Risk Assessment: Avoids lines with potential big losses`);
@@ -357,6 +369,16 @@ function displayVersion() {
 
 // Initialize on page load
 window.addEventListener('load', function() {
+    // Initialize moveTree AFTER board is defined
+    moveTree = new PersistentMoveTree();
+    
+    // Make board accessible to moveTree
+    if (typeof window !== 'undefined') {
+        window.board = board;
+        window.castlingRights = castlingRights;
+        window.enPassantTarget = enPassantTarget;
+    }
+    
     // Initialize ChessAILearner if available
     if (typeof ChessAILearner !== 'undefined') {
         enhancedAI = new ChessAILearner();
@@ -635,12 +657,14 @@ function canCastle(fromRow, fromCol, toRow, toCol) {
 }
 
 function isKingInCheck(testBoard, player) {
+    if (!testBoard) return false;
+    
     const kingSymbol = player === 'white' ? '♔' : '♚';
     let kingRow = -1, kingCol = -1;
 
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            if (testBoard[row][col] === kingSymbol) {
+            if (testBoard[row] && testBoard[row][col] === kingSymbol) {
                 kingRow = row;
                 kingCol = col;
                 break;
@@ -655,9 +679,11 @@ function isKingInCheck(testBoard, player) {
 }
 
 function isSquareAttacked(testBoard, targetRow, targetCol, attackerColor) {
+    if (!testBoard) return false;
+    
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const piece = testBoard[row][col];
+            const piece = testBoard[row] && testBoard[row][col];
             if (piece && isPlayerPiece(piece, attackerColor)) {
                 if (canPieceAttack(piece, row, col, targetRow, targetCol, testBoard)) {
                     return true;
@@ -701,7 +727,7 @@ function isPathClearOnBoard(testBoard, fromRow, fromCol, toRow, toCol) {
     let currentCol = fromCol + dx;
 
     while (currentRow !== toRow || currentCol !== toCol) {
-        if (testBoard[currentRow][currentCol]) return false;
+        if (testBoard[currentRow] && testBoard[currentRow][currentCol]) return false;
         currentRow += dy;
         currentCol += dx;
     }
@@ -728,7 +754,9 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
     
     // Track current line for memory pruning
     const algebraicMove = toAlgebraicMove(fromRow, fromCol, toRow, toCol);
-    moveTree.activeLineMoves.push(algebraicMove);
+    if (moveTree) {
+        moveTree.activeLineMoves.push(algebraicMove);
+    }
     
     // Handle en passant capture
     if ((piece === '♙' || piece === '♟') && enPassantTarget && 
@@ -779,7 +807,9 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
     createBoard();
     
     // Prune inactive lines after each move
-    moveTree.pruneInactiveLines(moveTree.activeLineMoves);
+    if (moveTree) {
+        moveTree.pruneInactiveLines(moveTree.activeLineMoves);
+    }
 }
 
 function updateCastlingRights(piece, fromRow, fromCol, toRow, toCol) {
@@ -918,13 +948,15 @@ function isPlayerPieceForPosition(piece, player) {
 }
 
 function isPathClearForPosition(boardState, fromRow, fromCol, toRow, toCol) {
+    if (!boardState) return false;
+    
     const dx = Math.sign(toCol - fromCol);
     const dy = Math.sign(toRow - fromRow);
     let currentRow = fromRow + dy;
     let currentCol = fromCol + dx;
 
     while (currentRow !== toRow || currentCol !== toCol) {
-        if (boardState[currentRow][currentCol]) return false;
+        if (boardState[currentRow] && boardState[currentRow][currentCol]) return false;
         currentRow += dy;
         currentCol += dx;
     }
@@ -961,9 +993,11 @@ function canPieceAttackForPosition(piece, fromRow, fromCol, toRow, toCol, boardS
 }
 
 function isSquareAttackedForPosition(boardState, targetRow, targetCol, attackerColor) {
+    if (!boardState) return false;
+    
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const attacker = boardState[row][col];
+            const attacker = boardState[row] && boardState[row][col];
             if (attacker && isPlayerPieceForPosition(attacker, attackerColor)) {
                 if (canPieceAttackForPosition(attacker, row, col, targetRow, targetCol, boardState)) {
                     return true;
@@ -975,12 +1009,14 @@ function isSquareAttackedForPosition(boardState, targetRow, targetCol, attackerC
 }
 
 function isKingInCheckForPosition(boardState, player) {
+    if (!boardState) return false;
+    
     const kingSymbol = player === 'white' ? '♔' : '♚';
     let kingRow = -1, kingCol = -1;
 
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            if (boardState[row][col] === kingSymbol) {
+            if (boardState[row] && boardState[row][col] === kingSymbol) {
                 kingRow = row;
                 kingCol = col;
                 break;
@@ -996,10 +1032,11 @@ function isKingInCheckForPosition(boardState, player) {
 }
 
 function isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, player) {
+    if (!boardState) return false;
     if (toRow < 0 || toRow > 7 || toCol < 0 || toCol > 7) return false;
 
-    const piece = boardState[fromRow][fromCol];
-    const targetPiece = boardState[toRow][toCol];
+    const piece = boardState[fromRow] && boardState[fromRow][fromCol];
+    const targetPiece = boardState[toRow] && boardState[toRow][toCol];
 
     if (!piece) return false;
     if (targetPiece && isPlayerPieceForPosition(targetPiece, player)) return false;
@@ -1048,18 +1085,24 @@ function isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, play
 }
 
 function makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol) {
-    const newBoard = boardState.map(row => [...row]);
-    const piece = newBoard[fromRow][fromCol];
-    newBoard[toRow][toCol] = piece;
-    newBoard[fromRow][fromCol] = '';
+    if (!boardState) return null;
+    
+    const newBoard = boardState.map(row => row ? [...row] : []);
+    const piece = newBoard[fromRow] && newBoard[fromRow][fromCol];
+    if (newBoard[toRow] && piece) {
+        newBoard[toRow][toCol] = piece;
+        newBoard[fromRow][fromCol] = '';
+    }
     return newBoard;
 }
 
 function getAllPossibleMovesForPosition(boardState, player) {
+    if (!boardState) return [];
+    
     const moves = [];
     for (let fromRow = 0; fromRow < 8; fromRow++) {
         for (let fromCol = 0; fromCol < 8; fromCol++) {
-            const piece = boardState[fromRow][fromCol];
+            const piece = boardState[fromRow] && boardState[fromRow][fromCol];
             if (piece && isPlayerPieceForPosition(piece, player)) {
                 for (let toRow = 0; toRow < 8; toRow++) {
                     for (let toCol = 0; toCol < 8; toCol++) {
@@ -1075,10 +1118,12 @@ function getAllPossibleMovesForPosition(boardState, player) {
 }
 
 function isEndgamePositionForPosition(boardState) {
+    if (!boardState) return false;
+    
     let pieceCount = 0;
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
+            const piece = boardState[row] && boardState[row][col];
             if (piece && piece !== '♔' && piece !== '♚') {
                 pieceCount++;
             }
@@ -1088,11 +1133,13 @@ function isEndgamePositionForPosition(boardState) {
 }
 
 function evaluatePositionForSearch(boardState, player, moveNumber) {
+    if (!boardState) return 0;
+    
     let evaluation = 0;
 
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
+            const piece = boardState[row] && boardState[row][col];
             if (piece) {
                 const value = PIECE_VALUES[piece] || 0;
                 evaluation += isPlayerPieceForPosition(piece, 'white') ? value : -value;
@@ -1102,7 +1149,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
 
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const piece = boardState[row][col];
+            const piece = boardState[row] && boardState[row][col];
             if (piece && PIECE_SQUARE_TABLES[piece]) {
                 const tableValue = PIECE_SQUARE_TABLES[piece][row][col];
                 evaluation += isPlayerPieceForPosition(piece, 'white') ? tableValue : -tableValue;
@@ -1112,7 +1159,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
 
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
-        const piece = boardState[r][c];
+        const piece = boardState[r] && boardState[r][c];
         if (piece) {
             evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
         }
@@ -1137,6 +1184,7 @@ const SEARCH_CONFIG = {
 let transpositionTable = new Map();
 
 function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, player, moveNumber, trackWorstCase = false) {
+    if (!boardState) return 0;
     if (depth === 0) {
         return evaluatePositionForSearch(boardState, player, moveNumber);
     }
@@ -1159,11 +1207,13 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, false, nextPlayer, moveNumber + 1, trackWorstCase);
             
-            maxEval = Math.max(maxEval, evaluation);
+            const evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            maxEval = Math.max(maxEval, evalValue);
             if (trackWorstCase) {
-                worstCaseEval = Math.min(worstCaseEval, evaluation);
+                const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
+                worstCaseEval = Math.min(worstCaseEval, worstVal);
             }
-            alpha = Math.max(alpha, evaluation);
+            alpha = Math.max(alpha, evalValue);
             
             if (beta <= alpha) break;
         }
@@ -1178,11 +1228,13 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, trackWorstCase);
             
-            minEval = Math.min(minEval, evaluation);
+            const evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            minEval = Math.min(minEval, evalValue);
             if (trackWorstCase) {
-                worstCaseEval = Math.max(worstCaseEval, evaluation);
+                const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
+                worstCaseEval = Math.max(worstCaseEval, worstVal);
             }
-            beta = Math.min(beta, evaluation);
+            beta = Math.min(beta, evalValue);
             
             if (beta <= alpha) break;
         }
@@ -1201,7 +1253,7 @@ function findBestMoveWithRiskAssessment() {
         if (openingMoveAlgebraic) {
             const openingMove = parseAlgebraicMove(openingMoveAlgebraic);
             if (openingMove && isValidMove(openingMove.fromRow, openingMove.fromCol, openingMove.toRow, openingMove.toCol)) {
-                console.log(`📖 Opening book: Playing ${openingMoveAlgebraic} (${enhancedAI.getOpeningName(openingMoveAlgebraic) || 'Book Move'})`);
+                console.log(`📖 Opening book: Playing ${openingMoveAlgebraic}`);
                 return openingMove;
             }
         }
@@ -1217,7 +1269,7 @@ function findBestMoveWithRiskAssessment() {
     
     for (const move of allMoves) {
         let cachedResult = null;
-        if (SEARCH_CONFIG.useMemory) {
+        if (moveTree && SEARCH_CONFIG.useMemory) {
             cachedResult = moveTree.getCachedEvaluation(move, board, currentPlayer, castlingRights, enPassantTarget);
         }
         
@@ -1238,16 +1290,17 @@ function findBestMoveWithRiskAssessment() {
                 currentPlayer === 'white' ? 'black' : 'white', moveCount + 1, true);
             
             const worstCase = typeof worstResult === 'object' ? worstResult.best : worstResult;
+            const bestCase = typeof bestResult === 'object' ? bestResult.best : bestResult;
             
             evaluatedMoves.push({
                 move,
-                bestCase: bestResult,
+                bestCase: bestCase,
                 worstCase: worstCase,
                 depth: searchDepth
             });
             
-            if (SEARCH_CONFIG.useMemory) {
-                moveTree.storeMoveEvaluation(move, bestResult, searchDepth, [{ worst: worstCase }]);
+            if (moveTree && SEARCH_CONFIG.useMemory) {
+                moveTree.storeMoveEvaluation(move, bestCase, searchDepth, [{ worst: worstCase }]);
             }
         }
     }
@@ -1259,24 +1312,28 @@ function findBestMoveWithRiskAssessment() {
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
     
     // Extend calculations for the selected line
-    if (SEARCH_CONFIG.useMemory) {
+    if (moveTree && SEARCH_CONFIG.useMemory) {
         const extendedVariations = [];
         const newBoardAfterMove = makeTestMoveForPosition(board, 
             bestSafeMove.move.fromRow, bestSafeMove.move.fromCol,
             bestSafeMove.move.toRow, bestSafeMove.move.toCol);
         
-        const nextMoves = getAllPossibleMovesForPosition(newBoardAfterMove, currentPlayer === 'white' ? 'black' : 'white');
-        for (const nextMove of nextMoves.slice(0, 3)) {
-            const algebraicKey = toAlgebraicMove(nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
-            const deeperBoard = makeTestMoveForPosition(newBoardAfterMove, 
-                nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
-            const deeperEval = minimaxWithRisk(deeperBoard, 2, -Infinity, Infinity, true,
-                currentPlayer, moveCount + 2, false);
-            
-            extendedVariations.push({
-                moveKey: algebraicKey,
-                evaluation: deeperEval
-            });
+        if (newBoardAfterMove) {
+            const nextMoves = getAllPossibleMovesForPosition(newBoardAfterMove, currentPlayer === 'white' ? 'black' : 'white');
+            for (const nextMove of nextMoves.slice(0, 3)) {
+                const algebraicKey = toAlgebraicMove(nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
+                const deeperBoard = makeTestMoveForPosition(newBoardAfterMove, 
+                    nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
+                if (deeperBoard) {
+                    const deeperEval = minimaxWithRisk(deeperBoard, 2, -Infinity, Infinity, true,
+                        currentPlayer, moveCount + 2, false);
+                    
+                    extendedVariations.push({
+                        moveKey: algebraicKey,
+                        evaluation: deeperEval
+                    });
+                }
+            }
         }
         
         moveTree.extendLine(moveTree.activeLineMoves, extendedVariations);
@@ -1319,8 +1376,10 @@ function makeAIMove() {
             syncStatusElement.classList.remove('thinking');
         }
         
-        const stats = moveTree.getStats();
-        console.log(`📊 Memory stats: ${stats.totalMoves} moves cached`);
+        if (moveTree) {
+            const stats = moveTree.getStats();
+            console.log(`📊 Memory stats: ${stats.totalMoves} moves cached`);
+        }
     }, 300);
 }
 
@@ -1406,7 +1465,7 @@ function updateAIStats() {
 
     if (!gamesPlayedElement || !winRateElement) return;
 
-    gamesPlayedElement.textContent = moveTree.getStats().totalMoves.toString();
+    gamesPlayedElement.textContent = moveTree ? moveTree.getStats().totalMoves.toString() : '0';
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
@@ -1448,7 +1507,9 @@ function newGame() {
 
     enPassantTarget = null;
     
-    moveTree.activeLineMoves = [];
+    if (moveTree) {
+        moveTree.activeLineMoves = [];
+    }
 
     createBoard();
     updateStatus();
@@ -1482,7 +1543,9 @@ function undoMove() {
     enPassantTarget = previousState.enPassantTarget;
     gameOver = false;
     
-    moveTree.activeLineMoves.pop();
+    if (moveTree) {
+        moveTree.activeLineMoves.pop();
+    }
 
     createBoard();
     updateStatus();
@@ -1527,7 +1590,9 @@ function changeGameMode() {
 
 function clearMemory() {
     if (confirm('Clear AI memory? This will delete all cached calculations.')) {
-        moveTree.clear();
+        if (moveTree) {
+            moveTree.clear();
+        }
         transpositionTable.clear();
         console.log("🧹 Memory cleared!");
         updateAIStats();
@@ -1538,7 +1603,7 @@ function clearMemory() {
 // Expose functions for debugging
 if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
-    window.getAIMemoryStats = () => moveTree.getStats();
+    window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
 }
 
 console.log(`✅ Chess Game v${GAME_VERSION} loaded - PMTS with Risk Assessment and Opening Book!`);

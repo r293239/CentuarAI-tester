@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.1 - Phase-based evaluation with capture buffs (50/49 system)
+// VERSION: 2.3.2 - Fixed pawn double-move jumping over pieces
 // COMPATIBLE WITH: chess-ai-database.js (v2.0)
 
-const GAME_VERSION = "2.3.1";
+const GAME_VERSION = "2.3.2";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -354,7 +354,7 @@ const PIECE_VALUES = {
     '': 0
 };
 
-// Position evaluation tables (same as before)
+// Position evaluation tables
 const PIECE_SQUARE_TABLES = {
     '♙': [
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -437,6 +437,52 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
     return files[fromCol] + ranks[fromRow] + files[toCol] + ranks[toRow];
 }
 
+// ========== FIX: PAWN DOUBLE MOVE PATH CHECK ==========
+// This function checks if the path is clear for a pawn's double move
+function isPawnDoubleMovePathClear(fromRow, fromCol, toRow, toCol, piece) {
+    const direction = piece === '♙' ? -1 : 1;
+    const intermediateRow = fromRow + direction;
+    
+    // Check if the square in between is empty
+    return !board[intermediateRow][fromCol];
+}
+
+// Modified pawn move validation with path clearing
+function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
+    const direction = piece === '♙' ? -1 : 1;
+    const startRow = piece === '♙' ? 6 : 1;
+    const absDx = Math.abs(dx);
+
+    // Single square forward move
+    if (dx === 0 && dy === direction && !board[toRow][toCol]) {
+        return true;
+    }
+    
+    // Double square forward move (only from starting position)
+    if (dx === 0 && fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
+        // FIX: Check that the square in between is empty (no jumping over pieces)
+        const intermediateRow = fromRow + direction;
+        if (board[intermediateRow][fromCol]) {
+            console.log(`🚫 Pawn cannot jump over piece at row ${intermediateRow}, col ${fromCol}`);
+            return false;
+        }
+        return true;
+    }
+    
+    // Capture move
+    if (absDx === 1 && dy === direction) {
+        if (board[toRow][toCol]) {
+            return true;
+        }
+        // En passant capture
+        if (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // ========== RISK ASSESSMENT CLASS ==========
 class RiskAssessment {
     constructor() {
@@ -490,7 +536,7 @@ function displayVersion() {
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`🎯 CAPTURE SYSTEM: +50 for taking, -49 for losing (net +1 incentive)`);
     console.log(`🎮 Phase Detection: Based on material count (pieces on board)`);
-    console.log(`🔄 Dynamic Extension: Extends calculations for active line only`);
+    console.log(`🐛 FIXED: Pawns cannot jump over pieces on two-square moves`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -530,7 +576,7 @@ window.addEventListener('load', function() {
     const strategy = phaseDetector.getPhaseStrategy(phase);
     console.log(`🎮 Game Phase: ${strategy.name} - ${strategy.description}`);
     
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded - Phase Detection + Capture Buffs! ♛`);
+    console.log(`♔ Chess Game v${GAME_VERSION} Loaded - Fixed Pawn Jump Bug! ♛`);
 });
 
 function createBoard() {
@@ -696,16 +742,33 @@ function isValidPieceMove(piece, fromRow, fromCol, toRow, toCol) {
     }
 }
 
+// Updated isValidPawnMove with path clearing check
 function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
-    const direction = piece === 'P' ? -1 : 1;
-    const startRow = piece === 'P' ? 6 : 1;
+    const direction = piece === '♙' ? -1 : 1;
+    const startRow = piece === '♙' ? 6 : 1;
     const absDx = Math.abs(dx);
 
-    if (dx === 0) {
-        if (dy === direction && !board[toRow][toCol]) return true;
-        if (fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) return true;
-    } else if (absDx === 1 && dy === direction) {
-        if (board[toRow][toCol]) return true;
+    // Single square forward move
+    if (dx === 0 && dy === direction && !board[toRow][toCol]) {
+        return true;
+    }
+    
+    // Double square forward move (only from starting position)
+    if (dx === 0 && fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
+        // FIX: Check that the square in between is empty (no jumping over pieces)
+        const intermediateRow = fromRow + direction;
+        if (board[intermediateRow][fromCol]) {
+            return false;
+        }
+        return true;
+    }
+    
+    // Capture move
+    if (absDx === 1 && dy === direction) {
+        if (board[toRow][toCol]) {
+            return true;
+        }
+        // En passant capture
         if (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col) {
             return true;
         }
@@ -920,6 +983,7 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
         board[toRow][toCol] = piece === '♙' ? '♕' : '♛';
     }
     
+    // Set en passant target if pawn just moved two squares
     enPassantTarget = null;
     if ((piece === '♙' || piece === '♟') && Math.abs(toRow - fromRow) === 2) {
         enPassantTarget = {
@@ -1202,10 +1266,19 @@ function isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, play
         case 'p':
             const direction = pieceCode === 'P' ? -1 : 1;
             const startRow = pieceCode === 'P' ? 6 : 1;
-            if (dx === 0) {
-                if (dy === direction && !boardState[toRow][toCol]) valid = true;
-                if (fromRow === startRow && dy === 2 * direction && !boardState[toRow][toCol]) valid = true;
-            } else if (absDx === 1 && dy === direction && boardState[toRow][toCol]) {
+            // Single square forward
+            if (dx === 0 && dy === direction && !boardState[toRow][toCol]) {
+                valid = true;
+            }
+            // Double square forward with path check
+            else if (dx === 0 && fromRow === startRow && dy === 2 * direction && !boardState[toRow][toCol]) {
+                const intermediateRow = fromRow + direction;
+                if (!boardState[intermediateRow][fromCol]) {
+                    valid = true;
+                }
+            }
+            // Capture
+            else if (absDx === 1 && dy === direction && boardState[toRow][toCol]) {
                 valid = true;
             }
             break;
@@ -1303,12 +1376,10 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     }
     
     // Add capture bonuses based on phase
-    // The AI gets +50 for taking pieces, -49 for losing them (net +1 per capture)
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece) {
-                // Check if this piece can capture anything
                 const color = isPlayerPieceForPosition(piece, 'white') ? 'white' : 'black';
                 const opponentColor = color === 'white' ? 'black' : 'white';
                 
@@ -1317,7 +1388,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
                         const target = boardState[toRow] && boardState[toRow][toCol];
                         if (target && isPlayerPieceForPosition(target, opponentColor)) {
                             if (isValidMoveForPosition(boardState, row, col, toRow, toCol, color)) {
-                                // Capture potential: +50 for taking
                                 const capturePotential = CAPTURE_BONUS * strategy.capturePriority;
                                 captureScore += isPlayerPieceForPosition(piece, 'white') ? capturePotential : -capturePotential;
                             }
@@ -1353,7 +1423,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     
     // Development bonus for opening
     if (phase === 'opening') {
-        // Bonus for knights and bishops developed
         let developedPieces = 0;
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
@@ -1373,7 +1442,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     // King safety with phase-based priority
     if (phase === 'opening' || phase === 'middlegame') {
         const kingSafetyBonus = 40 * strategy.kingSafetyPriority;
-        // Check if king is castled (simplified)
         const whiteKingPos = findKingPosition(boardState, 'white');
         const blackKingPos = findKingPosition(boardState, 'black');
         
@@ -1732,7 +1800,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.3.1 (50/49 Capture)';
+        difficultyElement.textContent = 'PMTS v2.3.2 (No Pawn Jump)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -1793,6 +1861,7 @@ function newGame() {
     const phase = phaseDetector.detectPhase(board);
     const strategy = phaseDetector.getPhaseStrategy(phase);
     console.log(`🎯 New game started! ${GAME_VERSION} - ${strategy.name} strategy`);
+    console.log(`🐛 FIXED: Pawns cannot jump over pieces on two-square moves`);
     updatePhaseDisplay();
 }
 
@@ -1845,7 +1914,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.3.1)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.3.2)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -1883,9 +1952,10 @@ if (typeof window !== 'undefined') {
             totalPieces: material.totalPieces,
             majorPieces: material.majorPieces,
             minorPieces: material.minorPieces,
-            captureBonus: `${CAPTURE_BONUS}/${CAPTURE_PENALTY}`
+            captureBonus: `${CAPTURE_BONUS}/${CAPTURE_PENALTY}`,
+            fix: "Pawns cannot jump over pieces on two-square moves"
         };
     };
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Phase Detection + 50/49 Capture System!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Fixed Pawn Jump Bug!`);

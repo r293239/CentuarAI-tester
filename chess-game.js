@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.2 - Fixed pawn double-move jumping over pieces
-// COMPATIBLE WITH: chess-ai-database.js (v2.0)
+// VERSION: 2.3.1 - Phase-based evaluation with capture buffs + Endgame Engine Support
+// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.0)
 
-const GAME_VERSION = "2.3.2";
+const GAME_VERSION = "2.3.1-endgame";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -182,6 +182,7 @@ class GamePhaseDetector {
         let totalPieces = 0;
         let majorPieces = 0;
         let minorPieces = 0;
+        let queens = 0;
         
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
@@ -189,55 +190,46 @@ class GamePhaseDetector {
                 if (piece && piece !== '♔' && piece !== '♚') {
                     totalPieces++;
                     
-                    // Count major pieces (Queen, Rooks)
-                    if (piece === '♕' || piece === '♛' || piece === '♖' || piece === '♜') {
+                    if (piece === '♕' || piece === '♛') {
+                        queens++;
                         majorPieces++;
-                    }
-                    // Count minor pieces (Bishops, Knights)
-                    if (piece === '♗' || piece === '♝' || piece === '♘' || piece === '♞') {
+                    } else if (piece === '♖' || piece === '♜') {
+                        majorPieces++;
+                    } else if (piece === '♗' || piece === '♝' || piece === '♘' || piece === '♞') {
                         minorPieces++;
                     }
                 }
             }
         }
         
-        return { totalPieces, majorPieces, minorPieces };
+        return { totalPieces, majorPieces, minorPieces, queens };
     }
 
     detectPhase(board) {
-        const { totalPieces, majorPieces, minorPieces } = this.countMaterialOnBoard(board);
+        const { totalPieces, majorPieces, queens } = this.countMaterialOnBoard(board);
         
-        // ENDGAME CONDITIONS:
-        // 1. Very few pieces left (≤ 10 total pieces)
-        // 2. No queens on board
-        // 3. Only kings + pawns + maybe 1 minor piece
-        if (totalPieces <= 10) {
+        // ENDGAME: Very few pieces left
+        if (totalPieces <= 10 || (queens === 0 && totalPieces <= 12)) {
             this.phase = 'endgame';
         }
-        // LATE MIDDLEGAME:
-        // 1. Fewer than 20 pieces
-        // 2. Queens are often traded
-        else if (totalPieces <= 18 && majorPieces <= 2) {
+        // LATE MIDDLEGAME: Pieces traded, maybe one queen
+        else if (totalPieces <= 18 && majorPieces <= 3) {
             this.phase = 'late_middlegame';
         }
-        // MIDDLEGAME:
-        // 1. Most pieces still on board
-        // 2. Queens are present
+        // MIDDLEGAME: Most pieces still on board
         else if (totalPieces <= 28) {
             this.phase = 'middlegame';
         }
-        // OPENING:
-        // 1. Almost all pieces on board
+        // OPENING: Almost all pieces on board
         else {
             this.phase = 'opening';
         }
         
-        // Additional endgame detection: no queens and very few major pieces
-        if (majorPieces === 0 && totalPieces <= 12) {
-            this.phase = 'endgame';
-        }
-        
         return this.phase;
+    }
+
+    isEndgame(board) {
+        return this.detectPhase(board) === 'endgame';
     }
 
     getPhaseStrategy(phase) {
@@ -280,7 +272,7 @@ class GamePhaseDetector {
                     centerControlPriority: 0.15,
                     kingSafetyPriority: 0.2,
                     capturePriority: 0.6,
-                    searchDepth: 5
+                    searchDepth: 6
                 };
             default:
                 return {
@@ -335,6 +327,9 @@ let enPassantTarget = null;
 // Enhanced AI with opening book
 let enhancedAI = null;
 
+// Endgame engine (loaded only when needed)
+let endgameEngine = null;
+
 // Piece mappings
 const pieceMap = {
     '♜': 'r', '♞': 'n', '♝': 'b', '♛': 'q', '♚': 'k', '♟': 'p',
@@ -342,8 +337,6 @@ const pieceMap = {
 };
 
 // ========== BUFFED CAPTURE SYSTEM ==========
-// 50 points for taking a piece, 49 points for losing a piece
-// This creates a net +1 incentive for any capture, making AI more aggressive
 const CAPTURE_BONUS = 50;
 const CAPTURE_PENALTY = 49;
 
@@ -438,16 +431,6 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
 }
 
 // ========== FIX: PAWN DOUBLE MOVE PATH CHECK ==========
-// This function checks if the path is clear for a pawn's double move
-function isPawnDoubleMovePathClear(fromRow, fromCol, toRow, toCol, piece) {
-    const direction = piece === '♙' ? -1 : 1;
-    const intermediateRow = fromRow + direction;
-    
-    // Check if the square in between is empty
-    return !board[intermediateRow][fromCol];
-}
-
-// Modified pawn move validation with path clearing
 function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
     const direction = piece === '♙' ? -1 : 1;
     const startRow = piece === '♙' ? 6 : 1;
@@ -460,10 +443,9 @@ function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
     
     // Double square forward move (only from starting position)
     if (dx === 0 && fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
-        // FIX: Check that the square in between is empty (no jumping over pieces)
+        // Check that the square in between is empty (no jumping over pieces)
         const intermediateRow = fromRow + direction;
         if (board[intermediateRow][fromCol]) {
-            console.log(`🚫 Pawn cannot jump over piece at row ${intermediateRow}, col ${fromCol}`);
             return false;
         }
         return true;
@@ -536,7 +518,7 @@ function displayVersion() {
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`🎯 CAPTURE SYSTEM: +50 for taking, -49 for losing (net +1 incentive)`);
     console.log(`🎮 Phase Detection: Based on material count (pieces on board)`);
-    console.log(`🐛 FIXED: Pawns cannot jump over pieces on two-square moves`);
+    console.log(`📚 Endgame Engine: Activates automatically when pieces ≤ 12`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -560,9 +542,16 @@ window.addEventListener('load', function() {
     if (typeof ChessAILearner !== 'undefined') {
         enhancedAI = new ChessAILearner();
         console.log(`🧠 Enhanced AI v${enhancedAI.version} loaded with opening book!`);
-        console.log("📖 Opening book loaded with 2000+ professional lines");
     } else {
         console.log("⚠️ ChessAILearner not found - using PMTS only");
+    }
+    
+    // Initialize Endgame Engine if available (but only use when needed)
+    if (typeof ChessEndgameEngine !== 'undefined') {
+        endgameEngine = new ChessEndgameEngine();
+        console.log(`📚 Endgame Engine v${endgameEngine.version} loaded - will activate in endgame!`);
+    } else {
+        console.log("⚠️ ChessEndgameEngine not found - using standard evaluation");
     }
     
     createBoard();
@@ -576,7 +565,7 @@ window.addEventListener('load', function() {
     const strategy = phaseDetector.getPhaseStrategy(phase);
     console.log(`🎮 Game Phase: ${strategy.name} - ${strategy.description}`);
     
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded - Fixed Pawn Jump Bug! ♛`);
+    console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
 });
 
 function createBoard() {
@@ -742,41 +731,6 @@ function isValidPieceMove(piece, fromRow, fromCol, toRow, toCol) {
     }
 }
 
-// Updated isValidPawnMove with path clearing check
-function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
-    const direction = piece === '♙' ? -1 : 1;
-    const startRow = piece === '♙' ? 6 : 1;
-    const absDx = Math.abs(dx);
-
-    // Single square forward move
-    if (dx === 0 && dy === direction && !board[toRow][toCol]) {
-        return true;
-    }
-    
-    // Double square forward move (only from starting position)
-    if (dx === 0 && fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
-        // FIX: Check that the square in between is empty (no jumping over pieces)
-        const intermediateRow = fromRow + direction;
-        if (board[intermediateRow][fromCol]) {
-            return false;
-        }
-        return true;
-    }
-    
-    // Capture move
-    if (absDx === 1 && dy === direction) {
-        if (board[toRow][toCol]) {
-            return true;
-        }
-        // En passant capture
-        if (enPassantTarget && toRow === enPassantTarget.row && toCol === enPassantTarget.col) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 function isPathClear(fromRow, fromCol, toRow, toCol) {
     const dx = Math.sign(toCol - fromCol);
     const dy = Math.sign(toRow - fromRow);
@@ -785,6 +739,21 @@ function isPathClear(fromRow, fromCol, toRow, toCol) {
 
     while (currentRow !== toRow || currentCol !== toCol) {
         if (board[currentRow][currentCol]) return false;
+        currentRow += dy;
+        currentCol += dx;
+    }
+
+    return true;
+}
+
+function isPathClearOnBoard(testBoard, fromRow, fromCol, toRow, toCol) {
+    const dx = Math.sign(toCol - fromCol);
+    const dy = Math.sign(toRow - fromRow);
+    let currentRow = fromRow + dy;
+    let currentCol = fromCol + dx;
+
+    while (currentRow !== toRow || currentCol !== toCol) {
+        if (testBoard[currentRow] && testBoard[currentRow][currentCol]) return false;
         currentRow += dy;
         currentCol += dx;
     }
@@ -917,21 +886,6 @@ function canPieceAttack(piece, fromRow, fromCol, toRow, toCol, testBoard) {
         default:
             return false;
     }
-}
-
-function isPathClearOnBoard(testBoard, fromRow, fromCol, toRow, toCol) {
-    const dx = Math.sign(toCol - fromCol);
-    const dy = Math.sign(toRow - fromRow);
-    let currentRow = fromRow + dy;
-    let currentCol = fromCol + dx;
-
-    while (currentRow !== toRow || currentCol !== toCol) {
-        if (testBoard[currentRow] && testBoard[currentRow][currentCol]) return false;
-        currentRow += dy;
-        currentCol += dx;
-    }
-
-    return true;
 }
 
 function makeMove(fromRow, fromCol, toRow, toCol) {
@@ -1081,7 +1035,20 @@ function updatePhaseDisplay() {
     
     const phase = phaseDetector.detectPhase(board);
     const strategy = phaseDetector.getPhaseStrategy(phase);
-    phaseElement.textContent = `${strategy.name} (${phaseDetector.countMaterialOnBoard(board).totalPieces} pieces)`;
+    const pieceCount = phaseDetector.countMaterialOnBoard(board).totalPieces;
+    phaseElement.textContent = `${strategy.name} (${pieceCount} pieces)`;
+    
+    // Show endgame engine status
+    const endgameStatusElement = document.getElementById('endgame-status');
+    if (endgameStatusElement) {
+        if (phase === 'endgame' && endgameEngine) {
+            endgameStatusElement.textContent = '📚 Endgame Engine ACTIVE';
+            endgameStatusElement.style.color = '#4caf50';
+        } else {
+            endgameStatusElement.textContent = '⚡ Standard Evaluation';
+            endgameStatusElement.style.color = '#ff9800';
+        }
+    }
 }
 
 function isCheckmate() {
@@ -1266,18 +1233,15 @@ function isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, play
         case 'p':
             const direction = pieceCode === 'P' ? -1 : 1;
             const startRow = pieceCode === 'P' ? 6 : 1;
-            // Single square forward
             if (dx === 0 && dy === direction && !boardState[toRow][toCol]) {
                 valid = true;
             }
-            // Double square forward with path check
             else if (dx === 0 && fromRow === startRow && dy === 2 * direction && !boardState[toRow][toCol]) {
                 const intermediateRow = fromRow + direction;
                 if (!boardState[intermediateRow][fromCol]) {
                     valid = true;
                 }
             }
-            // Capture
             else if (absDx === 1 && dy === direction && boardState[toRow][toCol]) {
                 valid = true;
             }
@@ -1338,22 +1302,19 @@ function getAllPossibleMovesForPosition(boardState, player) {
     return moves;
 }
 
-function isEndgamePositionForPosition(boardState) {
-    if (!boardState) return false;
-    
-    let pieceCount = 0;
+function findKingPosition(boardState, player) {
+    const kingSymbol = player === 'white' ? '♔' : '♚';
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                pieceCount++;
+            if (boardState[row] && boardState[row][col] === kingSymbol) {
+                return { row, col };
             }
         }
     }
-    return pieceCount <= 10;
+    return null;
 }
 
-// ========== ENHANCED EVALUATION WITH CAPTURE BUFFS AND PHASE DETECTION ==========
+// ========== ENHANCED EVALUATION WITH CAPTURE BUFFS ==========
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
@@ -1363,6 +1324,41 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     // Detect current game phase based on material
     const phase = phaseDetector.detectPhase(boardState);
     const strategy = phaseDetector.getPhaseStrategy(phase);
+    const isEndgame = phase === 'endgame';
+    
+    // ========== ENDGAME: Use specialized endgame engine if available ==========
+    if (isEndgame && endgameEngine && typeof endgameEngine.evaluateEndgamePosition === 'function') {
+        console.log("📚 Using Endgame Engine for evaluation");
+        evaluation = endgameEngine.evaluateEndgamePosition(boardState, player, phase);
+        
+        // Add endgame piece square tables
+        if (typeof endgameEngine.getEndgamePieceSquareValue === 'function') {
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const piece = boardState[row] && boardState[row][col];
+                    if (piece) {
+                        const endgameValue = endgameEngine.getEndgamePieceSquareValue(piece, row, col);
+                        if (endgameValue !== undefined) {
+                            evaluation += isPlayerPieceForPosition(piece, 'white') ? endgameValue : -endgameValue;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for checkmate patterns
+        if (typeof endgameEngine.isCheckmatePattern === 'function') {
+            const checkmatePattern = endgameEngine.isCheckmatePattern(boardState, player);
+            if (checkmatePattern) {
+                evaluation += 1000;
+                console.log(`🎯 Checkmate pattern detected: ${checkmatePattern}`);
+            }
+        }
+        
+        return evaluation;
+    }
+    
+    // ========== OPENING/MIDDLEGAME: Standard evaluation ==========
     
     // Material balance with CAPTURE BUFFS
     for (let row = 0; row < 8; row++) {
@@ -1453,21 +1449,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
     
-    // Endgame king activity bonus
-    if (phase === 'endgame') {
-        const whiteKingPos = findKingPosition(boardState, 'white');
-        const blackKingPos = findKingPosition(boardState, 'black');
-        
-        if (whiteKingPos) {
-            const centerDistance = Math.abs(3.5 - whiteKingPos.row) + Math.abs(3.5 - whiteKingPos.col);
-            evaluation += (14 - centerDistance) * 15;
-        }
-        if (blackKingPos) {
-            const centerDistance = Math.abs(3.5 - blackKingPos.row) + Math.abs(3.5 - blackKingPos.col);
-            evaluation -= (14 - centerDistance) * 15;
-        }
-    }
-    
     // Mobility with phase-based priority
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
@@ -1476,23 +1457,11 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     return evaluation;
 }
 
-function findKingPosition(boardState, player) {
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row] && boardState[row][col] === kingSymbol) {
-                return { row, col };
-            }
-        }
-    }
-    return null;
-}
-
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
 
 const SEARCH_CONFIG = {
     baseDepth: 3,
-    endgameDepth: 5,
+    endgameDepth: 6,
     useMemory: true,
     riskAssessment: true
 };
@@ -1566,7 +1535,13 @@ function findBestMoveWithRiskAssessment() {
     // Detect current phase for logging
     const phase = phaseDetector.detectPhase(board);
     const strategy = phaseDetector.getPhaseStrategy(phase);
+    const isEndgame = phase === 'endgame';
+    
     console.log(`🎮 Current Phase: ${strategy.name} (${phaseDetector.countMaterialOnBoard(board).totalPieces} pieces on board)`);
+    
+    if (isEndgame && endgameEngine) {
+        console.log("📚 Endgame Engine ACTIVE - Using specialized evaluation");
+    }
     
     // Try opening book first if available and in opening phase
     if (enhancedAI && phase === 'opening' && moveHistory.length < 12) {
@@ -1580,7 +1555,6 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
-    const isEndgame = phase === 'endgame';
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
     console.log(`🔍 AI searching at depth ${searchDepth} with ${strategy.name} strategy`);
@@ -1800,7 +1774,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.3.2 (No Pawn Jump)';
+        difficultyElement.textContent = 'PMTS v2.3.1 (Endgame Ready)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -1914,7 +1888,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.3.2)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.3.1)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -1953,9 +1927,10 @@ if (typeof window !== 'undefined') {
             majorPieces: material.majorPieces,
             minorPieces: material.minorPieces,
             captureBonus: `${CAPTURE_BONUS}/${CAPTURE_PENALTY}`,
+            endgameEngineActive: phase === 'endgame' && endgameEngine !== null,
             fix: "Pawns cannot jump over pieces on two-square moves"
         };
     };
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Fixed Pawn Jump Bug!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Endgame Engine Ready!`);

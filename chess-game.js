@@ -421,6 +421,7 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
 }
 
 // ========== FIX: PAWN DOUBLE MOVE PATH CHECK ==========
+// ONLY CHANGE: Added path clearing check for pawn double moves
 function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
     const direction = piece === '♙' ? -1 : 1;
     const startRow = piece === '♙' ? 6 : 1;

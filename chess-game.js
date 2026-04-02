@@ -420,11 +420,12 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
     return files[fromCol] + ranks[fromRow] + files[toCol] + ranks[toRow];
 }
 
-// ========== FIX: PAWN DOUBLE MOVE PATH CHECK ==========
-// ONLY CHANGE: Added path clearing check for pawn double moves
-function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
+// ========== FIXED: PAWN DOUBLE MOVE PATH CHECK ==========
+function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol) {
     const direction = piece === '♙' ? -1 : 1;
     const startRow = piece === '♙' ? 6 : 1;
+    const dx = toCol - fromCol;
+    const dy = toRow - fromRow;
     const absDx = Math.abs(dx);
 
     // Single square forward move
@@ -434,7 +435,7 @@ function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
     
     // Double square forward move (only from starting position)
     if (dx === 0 && fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
-        // FIX: Check that the square in between is empty (no jumping over pieces)
+        // Check that the square in between is empty (no jumping over pieces)
         const intermediateRow = fromRow + direction;
         if (board[intermediateRow][fromCol]) {
             return false;
@@ -699,7 +700,8 @@ function isValidPieceMove(piece, fromRow, fromCol, toRow, toCol) {
 
     switch (piece.toLowerCase()) {
         case 'p':
-            return isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy);
+            // Fixed: Pass piece and coordinates properly
+            return isValidPawnMove(piece, fromRow, fromCol, toRow, toCol);
         case 'r':
             return (dx === 0 || dy === 0) && isPathClear(fromRow, fromCol, toRow, toCol);
         case 'n':
@@ -1089,7 +1091,7 @@ function updateMoveHistory() {
     moveListElement.textContent = formattedMoves.join(' ');
 }
 
-// ========== POSITION EVALUATION FUNCTIONS WITH CAPTURE BUFFS ==========
+// ========== POSITION EVALUATION FUNCTIONS ==========
 
 function isPlayerPieceForPosition(piece, player) {
     if (!piece) return false;
@@ -1277,21 +1279,6 @@ function getAllPossibleMovesForPosition(boardState, player) {
     return moves;
 }
 
-function isEndgamePositionForPosition(boardState) {
-    if (!boardState) return false;
-    
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                pieceCount++;
-            }
-        }
-    }
-    return pieceCount <= 10;
-}
-
 function findKingPosition(boardState, player) {
     const kingSymbol = player === 'white' ? '♔' : '♚';
     for (let row = 0; row < 8; row++) {
@@ -1304,14 +1291,13 @@ function findKingPosition(boardState, player) {
     return null;
 }
 
-// ========== ENHANCED EVALUATION WITH CAPTURE BUFFS AND PHASE DETECTION ==========
+// ========== ENHANCED EVALUATION WITH CAPTURE BUFFS ==========
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
     let evaluation = 0;
     let captureScore = 0;
     
-    // Detect current game phase based on material
     const phase = phaseDetector.detectPhase(boardState);
     const strategy = phaseDetector.getPhaseStrategy(phase);
     
@@ -1502,7 +1488,6 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Detect current phase for logging
     const phase = phaseDetector.detectPhase(board);
     const strategy = phaseDetector.getPhaseStrategy(phase);
     console.log(`🎮 Current Phase: ${strategy.name} (${phaseDetector.countMaterialOnBoard(board).totalPieces} pieces on board)`);
@@ -1572,7 +1557,6 @@ function findBestMoveWithRiskAssessment() {
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
     
-    // Log if capture move was selected
     const targetPiece = board[bestSafeMove.move.toRow] && board[bestSafeMove.move.toRow][bestSafeMove.move.toCol];
     if (targetPiece) {
         console.log(`⚔️ CAPTURE MOVE! Taking ${targetPiece} (${PIECE_VALUES[targetPiece]} + ${CAPTURE_BONUS} bonus)`);
@@ -1648,7 +1632,6 @@ function makeAIMove() {
             console.log(`📊 Memory stats: ${stats.totalMoves} moves cached`);
         }
         
-        // Update phase display after move
         updatePhaseDisplay();
     }, 300);
 }
@@ -1796,7 +1779,6 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    // Detect initial phase
     const phase = phaseDetector.detectPhase(board);
     const strategy = phaseDetector.getPhaseStrategy(phase);
     console.log(`🎯 New game started! ${GAME_VERSION} - ${strategy.name} strategy`);

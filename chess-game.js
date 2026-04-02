@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3 - Fully integrated with ChessAILearner opening book
-// COMPATIBLE WITH: chess-ai-database.js (v2.0)
+// VERSION: 2.4 - Fully integrated with ChessAILearner opening book and Endgame Engine
+// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.0)
 
-const GAME_VERSION = "2.3.1";
+const GAME_VERSION = "2.4";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -211,6 +211,9 @@ let enPassantTarget = null;
 // Enhanced AI with opening book
 let enhancedAI = null;
 
+// Endgame Engine
+let endgameEngine = null;
+
 // Piece mappings
 const pieceMap = {
     '♜': 'r', '♞': 'n', '♝': 'b', '♛': 'q', '♚': 'k', '♟': 'p',
@@ -356,10 +359,11 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment & Endgame Engine`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`🎯 Risk Assessment: Avoids lines with potential big losses`);
     console.log(`🔄 Dynamic Extension: Extends calculations for active line only`);
+    console.log(`📚 Endgame Engine: Specialized endgame knowledge base loaded`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -388,13 +392,24 @@ window.addEventListener('load', function() {
         console.log("⚠️ ChessAILearner not found - using PMTS only");
     }
     
+    // Initialize Endgame Engine
+    if (typeof ChessEndgameEngine !== 'undefined') {
+        endgameEngine = new ChessEndgameEngine();
+        console.log(`♟️ Endgame Engine v${endgameEngine.version} loaded!`);
+        console.log("   - Specialized endgame piece tables");
+        console.log("   - Endgame book with winning techniques");
+        console.log("   - Checkmate pattern database");
+    } else {
+        console.log("⚠️ ChessEndgameEngine not found - using standard evaluation");
+    }
+    
     createBoard();
     updateStatus();
     updateAIStats();
     changeGameMode();
     displayVersion();
     
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded - PMTS with Risk Assessment! ♛`);
+    console.log(`♔ Chess Game v${GAME_VERSION} Loaded - PMTS with Risk Assessment & Endgame Engine! ♛`);
 });
 
 function createBoard() {
@@ -571,7 +586,7 @@ function isValidPawnMove(piece, fromRow, fromCol, toRow, toCol, dx, dy) {
         
         // Moving two squares forward from starting position
         if (fromRow === startRow && dy === 2 * direction && !board[toRow][toCol]) {
-            // Check if the square in between is empty
+            // Check if the square in between is empty (FIXED PAWN GLITCH)
             const intermediateRow = fromRow + direction;
             if (!board[intermediateRow][fromCol]) return true;
         }
@@ -1149,6 +1164,10 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     
     let evaluation = 0;
 
+    // Check if we're in endgame phase
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    
+    // Material evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1159,16 +1178,32 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
+    // Positional evaluation - use endgame tables if in endgame
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
-            if (piece && PIECE_SQUARE_TABLES[piece]) {
-                const tableValue = PIECE_SQUARE_TABLES[piece][row][col];
+            if (piece) {
+                let tableValue;
+                if (isEndgame && endgameEngine && endgameEngine.endgamePieceTables[piece]) {
+                    // Use endgame-specific piece-square tables
+                    tableValue = endgameEngine.endgamePieceTables[piece][row][col];
+                } else if (PIECE_SQUARE_TABLES[piece]) {
+                    tableValue = PIECE_SQUARE_TABLES[piece][row][col];
+                } else {
+                    tableValue = 0;
+                }
                 evaluation += isPlayerPieceForPosition(piece, 'white') ? tableValue : -tableValue;
             }
         }
     }
 
+    // Endgame-specific evaluation from endgame engine
+    if (isEndgame && endgameEngine) {
+        const endgameScore = endgameEngine.evaluateEndgamePosition(boardState, player, "early_endgame");
+        evaluation += isPlayerPieceForPosition(piece, 'white') ? endgameScore : -endgameScore;
+    }
+
+    // Center control
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r] && boardState[r][c];
@@ -1177,6 +1212,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
+    // Mobility
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 5;
@@ -1259,7 +1295,7 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Try opening book first if available
+    // Try opening book first if available (only for early game)
     if (enhancedAI && moveHistory.length < 12) {
         const openingMoveAlgebraic = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1271,10 +1307,19 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
+    // Check for endgame-specific advice
     const isEndgame = isEndgamePositionForPosition(board);
+    if (isEndgame && endgameEngine) {
+        console.log("♟️ Endgame phase detected - using specialized endgame evaluation");
+        const advice = endgameEngine.getEndgameAdvice(board, currentPlayer);
+        if (advice && advice.length > 0) {
+            console.log("📚 Endgame advice:", advice[0]);
+        }
+    }
+    
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 AI searching at depth ${searchDepth} with RISK ASSESSMENT`);
+    console.log(`🔍 AI searching at depth ${searchDepth} with RISK ASSESSMENT${isEndgame ? ' (Endgame mode)' : ''}`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -1481,7 +1526,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.3 (Risk-Aware)';
+        difficultyElement.textContent = 'PMTS v2.4 (Risk-Aware + Endgame)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -1538,7 +1583,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with PMTS and Opening Book!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with PMTS, Opening Book, and Endgame Engine!`);
 }
 
 function undoMove() {
@@ -1588,7 +1633,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.3)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.4 + Endgame)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -1616,6 +1661,12 @@ function clearMemory() {
 if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
+    window.getEndgameAdvice = () => {
+        if (endgameEngine) {
+            return endgameEngine.getEndgameAdvice(board, currentPlayer);
+        }
+        return ["Endgame engine not loaded"];
+    };
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - PMTS with Risk Assessment and Opening Book!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - PMTS with Risk Assessment, Opening Book, and Endgame Engine!`);

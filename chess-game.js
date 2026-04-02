@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4 - Fully integrated with ChessAILearner opening book and Endgame Engine
-// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.0)
+// VERSION: 2.4.1 - Fixed endgame evaluation with full AI intelligence
+// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.1)
 
-const GAME_VERSION = "2.4";
+const GAME_VERSION = "2.4.1";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -567,6 +567,8 @@ function getGameStats() {
         console.log(`Version: ${endgameEngine.version}`);
         const phase = endgameEngine.detectEndgamePhase(board);
         console.log(`Game phase: ${phase}`);
+        const cacheStats = endgameEngine.getCacheStats();
+        console.log(`Cache hit rate: ${cacheStats.hitRate}`);
     }
     
     console.log(`\n=== POSITION INFO ===`);
@@ -1463,60 +1465,137 @@ function isEndgamePositionForPosition(boardState) {
             }
         }
     }
-    return pieceCount <= 10;
+    return pieceCount <= 12; // Slightly higher threshold for endgame detection
 }
 
+// FIXED: Proper evaluation function with correct endgame integration
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
     let evaluation = 0;
     const isEndgame = isEndgamePositionForPosition(boardState);
     
+    // Material evaluation (always important)
+    let whiteMaterial = 0;
+    let blackMaterial = 0;
+    
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece) {
                 const value = PIECE_VALUES[piece] || 0;
-                evaluation += isPlayerPieceForPosition(piece, 'white') ? value : -value;
+                if (isPlayerPieceForPosition(piece, 'white')) {
+                    whiteMaterial += value;
+                } else {
+                    blackMaterial += value;
+                }
             }
         }
     }
+    evaluation = whiteMaterial - blackMaterial;
 
+    // Positional evaluation - use appropriate tables based on game phase
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece) {
-                let tableValue;
+                let tableValue = 0;
+                
                 if (isEndgame && endgameEngine && endgameEngine.endgamePieceTables[piece]) {
-                    tableValue = endgameEngine.endgamePieceTables[piece][row][col];
+                    // Use endgame-specific piece-square tables for better endgame play
+                    tableValue = endgameEngine.getEndgamePieceSquareValue(piece, row, col);
                 } else if (PIECE_SQUARE_TABLES[piece]) {
+                    // Use standard piece-square tables for opening/middlegame
                     tableValue = PIECE_SQUARE_TABLES[piece][row][col];
-                } else {
-                    tableValue = 0;
                 }
-                evaluation += isPlayerPieceForPosition(piece, 'white') ? tableValue : -tableValue;
+                
+                if (isPlayerPieceForPosition(piece, 'white')) {
+                    evaluation += tableValue;
+                } else {
+                    evaluation -= tableValue;
+                }
             }
         }
     }
 
+    // Endgame-specific evaluation from endgame engine (only in endgame)
     if (isEndgame && endgameEngine) {
         const endgameScore = endgameEngine.evaluateEndgamePosition(boardState, player, "early_endgame");
-        evaluation += isPlayerPieceForPosition(piece, 'white') ? endgameScore : -endgameScore;
+        // Apply endgame score with appropriate sign based on player
+        if (player === 'white') {
+            evaluation += endgameScore;
+        } else {
+            evaluation -= endgameScore;
+        }
     }
 
+    // Center control bonus (reduced in endgame)
+    const centerBonus = isEndgame ? 15 : 30;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r] && boardState[r][c];
         if (piece) {
-            evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
+            if (isPlayerPieceForPosition(piece, 'white')) {
+                evaluation += centerBonus;
+            } else {
+                evaluation -= centerBonus;
+            }
         }
     }
 
+    // Mobility bonus (more important in endgame)
+    const mobilityWeight = isEndgame ? 8 : 5;
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
-    evaluation += (whiteMoves - blackMoves) * 5;
+    evaluation += (whiteMoves - blackMoves) * mobilityWeight;
+
+    // King safety - more important in middlegame, less in endgame
+    if (!isEndgame) {
+        const whiteKingPos = findKingForPosition(boardState, 'white');
+        const blackKingPos = findKingForPosition(boardState, 'black');
+        
+        if (whiteKingPos) {
+            const whiteKingSafety = evaluateKingSafety(boardState, whiteKingPos, 'white');
+            evaluation += whiteKingSafety;
+        }
+        if (blackKingPos) {
+            const blackKingSafety = evaluateKingSafety(boardState, blackKingPos, 'black');
+            evaluation -= blackKingSafety;
+        }
+    }
 
     return evaluation;
+}
+
+// Helper function for finding king in position
+function findKingForPosition(boardState, player) {
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row] && boardState[row][col] === kingSymbol) {
+                return { row, col };
+            }
+        }
+    }
+    return null;
+}
+
+// Evaluate king safety (pawn shield, etc.)
+function evaluateKingSafety(boardState, kingPos, player) {
+    let safety = 0;
+    const pawnShieldRows = player === 'white' ? [6, 5] : [1, 2];
+    const pawnSymbol = player === 'white' ? '♙' : '♟';
+    
+    // Check for pawn shield
+    for (const row of pawnShieldRows) {
+        for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
+            if (col >= 0 && col < 8 && boardState[row] && boardState[row][col] === pawnSymbol) {
+                safety += 15;
+            }
+        }
+    }
+    
+    return safety;
 }
 
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
@@ -1594,6 +1673,7 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
+    // Try opening book first if available (only for early game)
     if (enhancedAI && moveHistory.length < 12) {
         const openingMoveAlgebraic = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1605,6 +1685,7 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
+    // Check for endgame-specific advice
     const isEndgame = isEndgamePositionForPosition(board);
     if (isEndgame && endgameEngine) {
         console.log("♟️ Endgame phase detected - using specialized endgame evaluation");
@@ -1614,6 +1695,7 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
+    // Use deeper search in endgame for smarter play
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
     console.log(`🔍 AI searching at depth ${searchDepth} with RISK ASSESSMENT${isEndgame ? ' (Endgame mode)' : ''}`);
@@ -1665,6 +1747,7 @@ function findBestMoveWithRiskAssessment() {
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
     
+    // Extend calculations for the selected line
     if (moveTree && SEARCH_CONFIG.useMemory) {
         const extendedVariations = [];
         const newBoardAfterMove = makeTestMoveForPosition(board, 
@@ -1816,7 +1899,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.4 (Risk-Aware + Endgame)';
+        difficultyElement.textContent = 'PMTS v2.4.1 (Risk-Aware + Endgame)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -1923,7 +2006,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.4 + Endgame)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.4.1 + Endgame)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -1941,6 +2024,9 @@ function clearMemory() {
             moveTree.clear();
         }
         transpositionTable.clear();
+        if (endgameEngine) {
+            endgameEngine.clearCache();
+        }
         console.log("🧹 Memory cleared!");
         updateAIStats();
         alert('AI memory cleared!');

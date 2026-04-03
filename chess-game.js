@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.1 - Fixed endgame evaluation with full AI intelligence
+// VERSION: 2.4.2 - Fixed console commands
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.1)
 
-const GAME_VERSION = "2.4.1";
+const GAME_VERSION = "2.4.2";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -288,7 +288,7 @@ const PIECE_SQUARE_TABLES = {
 
 // ========== CONSOLE COMMANDS ==========
 
-function displayBoardConsole() {
+function consoleDisplayBoard() {
     console.log("\n  a b c d e f g h");
     for (let row = 0; row < 8; row++) {
         let line = (8 - row) + " ";
@@ -303,9 +303,10 @@ function displayBoardConsole() {
     if (isKingInCheck(board, currentPlayer)) {
         console.log(`⚠️ ${currentPlayer} is in check!`);
     }
+    return "Board displayed above";
 }
 
-function setPositionFromFEN(fen) {
+function consoleSetPositionFromFEN(fen) {
     try {
         const parts = fen.split(' ');
         const boardPart = parts[0];
@@ -369,15 +370,15 @@ function setPositionFromFEN(fen) {
         createBoard();
         updateStatus();
         console.log("✅ Position set successfully!");
-        displayBoardConsole();
-        return true;
+        consoleDisplayBoard();
+        return "Position set successfully";
     } catch (error) {
         console.error("Error parsing FEN:", error);
         return false;
     }
 }
 
-function getCurrentFEN() {
+function consoleGetCurrentFEN() {
     let fen = "";
     
     for (let row = 0; row < 8; row++) {
@@ -419,10 +420,11 @@ function getCurrentFEN() {
     
     fen += " " + halfMoveCount + " " + moveCount;
     
+    console.log("FEN: " + fen);
     return fen;
 }
 
-function setupTestPosition(positionName) {
+function consoleSetupTestPosition(positionName) {
     const positions = {
         "start": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
         "pawn_glitch_test": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -438,29 +440,29 @@ function setupTestPosition(positionName) {
     
     if (positions[positionName]) {
         console.log(`📌 Setting up ${positionName} position...`);
-        return setPositionFromFEN(positions[positionName]);
+        return consoleSetPositionFromFEN(positions[positionName]);
     } else {
         console.log(`Available positions: ${Object.keys(positions).join(", ")}`);
         return false;
     }
 }
 
-function makeAlgebraicMove(moveStr) {
+function consoleMakeAlgebraicMove(moveStr) {
     const move = parseAlgebraicMove(moveStr);
     if (move && isValidMove(move.fromRow, move.fromCol, move.toRow, move.toCol)) {
         makeMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
         switchPlayer();
         updateStatus();
         console.log(`✅ Move ${moveStr} made successfully`);
-        displayBoardConsole();
-        return true;
+        consoleDisplayBoard();
+        return `Move ${moveStr} made successfully`;
     } else {
         console.error(`❌ Invalid move: ${moveStr}`);
         return false;
     }
 }
 
-function getLegalMoves() {
+function consoleGetLegalMoves() {
     const moves = getAllPossibleMoves(currentPlayer);
     const algebraicMoves = moves.map(move => toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol));
     console.log(`📋 Legal moves for ${currentPlayer} (${moves.length} total):`);
@@ -468,7 +470,7 @@ function getLegalMoves() {
     return algebraicMoves;
 }
 
-function evaluatePosition() {
+function consoleEvaluatePosition() {
     const score = evaluatePositionForSearch(board, currentPlayer, moveCount);
     const isEndgame = isEndgamePositionForPosition(board);
     console.log(`📊 Position evaluation: ${score}`);
@@ -505,7 +507,7 @@ function getMaterialCount(player) {
     return { queen, rooks, bishops, knights, pawns, total };
 }
 
-function forceAIMove() {
+function consoleForceAIMove() {
     if (gameMode !== 'ai') {
         console.log("⚠️ Game mode is not AI. Use 'setMode ai' first.");
         return;
@@ -518,33 +520,38 @@ function forceAIMove() {
         console.log("⚠️ It's your turn! Make a move or switch sides.");
         return;
     }
-    makeAIMove();
     console.log("🤖 AI is thinking...");
+    makeAIMove();
+    return "AI move initiated";
 }
 
-function setGameMode(mode) {
+function consoleSetGameMode(mode) {
     if (mode === 'ai' || mode === 'player') {
         gameMode = mode;
         const gameModeSelect = document.getElementById('gameMode');
         if (gameModeSelect) gameModeSelect.value = mode;
         changeGameMode();
         console.log(`✅ Game mode set to ${mode === 'ai' ? 'vs AI' : 'vs Player'}`);
+        return `Game mode set to ${mode}`;
     } else {
         console.log("❌ Invalid mode. Use 'ai' or 'player'");
+        return false;
     }
 }
 
-function setAIDepth(depth) {
+function consoleSetAIDepth(depth) {
     if (depth >= 1 && depth <= 6) {
         SEARCH_CONFIG.baseDepth = depth;
         SEARCH_CONFIG.endgameDepth = depth + 2;
         console.log(`✅ AI depth set to ${depth} (endgame depth: ${depth+2})`);
+        return `AI depth set to ${depth}`;
     } else {
         console.log("❌ Depth must be between 1 and 6");
+        return false;
     }
 }
 
-function getGameStats() {
+function consoleGetGameStats() {
     console.log("\n=== GAME STATISTICS ===");
     console.log(`Version: ${GAME_VERSION}`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
@@ -572,18 +579,19 @@ function getGameStats() {
     }
     
     console.log(`\n=== POSITION INFO ===`);
-    evaluatePosition();
+    consoleEvaluatePosition();
+    return "Stats displayed above";
 }
 
-function printHelp() {
+function consolePrintHelp() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
     console.log("║              CHESS GAME CONSOLE COMMANDS                       ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
-    console.log("  displayBoard()     - Show current board in console");
+    console.log("  board()            - Show current board in console");
     console.log("  setFEN('fen')      - Set position from FEN string");
     console.log("  getFEN()           - Get current position as FEN");
-    console.log("  setup('name')      - Setup test position (start, endgame_king_pawn, etc.)");
+    console.log("  setup('name')      - Setup test position");
     console.log("\n🎮 MOVES:");
     console.log("  move('e2e4')       - Make a move using algebraic notation");
     console.log("  legalMoves()       - Show all legal moves for current player");
@@ -597,7 +605,6 @@ function printHelp() {
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  fen()              - Get current FEN (alias for getFEN)");
-    console.log("  board()            - Show board (alias for displayBoard)");
     console.log("\n🛠️ UTILITIES:");
     console.log("  newGame()          - Start a new game");
     console.log("  clearMemory()      - Clear AI memory cache");
@@ -609,6 +616,35 @@ function printHelp() {
     console.log("  move('d4d5')                - Make a move");
     console.log("  ai()                        - Let AI respond");
     console.log("\n");
+    return "Help displayed above";
+}
+
+function consoleUndoMove() {
+    if (gameHistory.length === 0) {
+        console.log("No moves to undo");
+        return;
+    }
+    undoMove();
+    console.log("Move undone");
+    consoleDisplayBoard();
+    return "Move undone";
+}
+
+function consoleNewGame() {
+    newGame();
+    console.log("New game started");
+    consoleDisplayBoard();
+    return "New game started";
+}
+
+function consoleClearMemory() {
+    clearMemory();
+    return "Memory cleared";
+}
+
+function consoleSwitchSides() {
+    switchSides();
+    return `Switched sides. Human now plays ${humanPlayer}`;
 }
 
 // ========== CONVERSION FUNCTIONS ==========
@@ -717,26 +753,27 @@ window.addEventListener('load', function() {
     changeGameMode();
     displayVersion();
     
-    window.displayBoard = displayBoardConsole;
-    window.setFEN = setPositionFromFEN;
-    window.getFEN = getCurrentFEN;
-    window.fen = getCurrentFEN;
-    window.move = makeAlgebraicMove;
-    window.legalMoves = getLegalMoves;
-    window.eval = evaluatePosition;
-    window.ai = forceAIMove;
-    window.setDepth = setAIDepth;
-    window.setMode = setGameMode;
-    window.switchSide = switchSides;
-    window.stats = getGameStats;
-    window.setup = setupTestPosition;
-    window.help = printHelp;
-    window.undo = undoMove;
-    window.newGame = newGame;
-    window.clearMemory = clearMemory;
+    // Register console commands
+    window.board = consoleDisplayBoard;
+    window.setFEN = consoleSetPositionFromFEN;
+    window.getFEN = consoleGetCurrentFEN;
+    window.fen = consoleGetCurrentFEN;
+    window.move = consoleMakeAlgebraicMove;
+    window.legalMoves = consoleGetLegalMoves;
+    window.eval = consoleEvaluatePosition;
+    window.ai = consoleForceAIMove;
+    window.setDepth = consoleSetAIDepth;
+    window.setMode = consoleSetGameMode;
+    window.switchSide = consoleSwitchSides;
+    window.stats = consoleGetGameStats;
+    window.setup = consoleSetupTestPosition;
+    window.help = consolePrintHelp;
+    window.undo = consoleUndoMove;
+    window.newGame = consoleNewGame;
+    window.clearMemory = consoleClearMemory;
     
     console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
-    console.log(`💡 Console commands available: help(), displayBoard(), setFEN(), move(), eval(), ai(), stats(), etc.`);
+    console.log(`💡 Console commands available: help(), board(), setFEN(), move(), eval(), ai(), stats(), etc.`);
 });
 
 function createBoard() {
@@ -1465,17 +1502,16 @@ function isEndgamePositionForPosition(boardState) {
             }
         }
     }
-    return pieceCount <= 12; // Slightly higher threshold for endgame detection
+    return pieceCount <= 12;
 }
 
-// FIXED: Proper evaluation function with correct endgame integration
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
     let evaluation = 0;
     const isEndgame = isEndgamePositionForPosition(boardState);
     
-    // Material evaluation (always important)
+    // Material evaluation
     let whiteMaterial = 0;
     let blackMaterial = 0;
     
@@ -1494,7 +1530,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     }
     evaluation = whiteMaterial - blackMaterial;
 
-    // Positional evaluation - use appropriate tables based on game phase
+    // Positional evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1502,10 +1538,8 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
                 let tableValue = 0;
                 
                 if (isEndgame && endgameEngine && endgameEngine.endgamePieceTables[piece]) {
-                    // Use endgame-specific piece-square tables for better endgame play
                     tableValue = endgameEngine.getEndgamePieceSquareValue(piece, row, col);
                 } else if (PIECE_SQUARE_TABLES[piece]) {
-                    // Use standard piece-square tables for opening/middlegame
                     tableValue = PIECE_SQUARE_TABLES[piece][row][col];
                 }
                 
@@ -1518,10 +1552,9 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Endgame-specific evaluation from endgame engine (only in endgame)
+    // Endgame-specific evaluation
     if (isEndgame && endgameEngine) {
         const endgameScore = endgameEngine.evaluateEndgamePosition(boardState, player, "early_endgame");
-        // Apply endgame score with appropriate sign based on player
         if (player === 'white') {
             evaluation += endgameScore;
         } else {
@@ -1529,7 +1562,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Center control bonus (reduced in endgame)
+    // Center control
     const centerBonus = isEndgame ? 15 : 30;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
@@ -1543,31 +1576,15 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Mobility bonus (more important in endgame)
+    // Mobility
     const mobilityWeight = isEndgame ? 8 : 5;
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * mobilityWeight;
 
-    // King safety - more important in middlegame, less in endgame
-    if (!isEndgame) {
-        const whiteKingPos = findKingForPosition(boardState, 'white');
-        const blackKingPos = findKingForPosition(boardState, 'black');
-        
-        if (whiteKingPos) {
-            const whiteKingSafety = evaluateKingSafety(boardState, whiteKingPos, 'white');
-            evaluation += whiteKingSafety;
-        }
-        if (blackKingPos) {
-            const blackKingSafety = evaluateKingSafety(boardState, blackKingPos, 'black');
-            evaluation -= blackKingSafety;
-        }
-    }
-
     return evaluation;
 }
 
-// Helper function for finding king in position
 function findKingForPosition(boardState, player) {
     const kingSymbol = player === 'white' ? '♔' : '♚';
     for (let row = 0; row < 8; row++) {
@@ -1578,24 +1595,6 @@ function findKingForPosition(boardState, player) {
         }
     }
     return null;
-}
-
-// Evaluate king safety (pawn shield, etc.)
-function evaluateKingSafety(boardState, kingPos, player) {
-    let safety = 0;
-    const pawnShieldRows = player === 'white' ? [6, 5] : [1, 2];
-    const pawnSymbol = player === 'white' ? '♙' : '♟';
-    
-    // Check for pawn shield
-    for (const row of pawnShieldRows) {
-        for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
-            if (col >= 0 && col < 8 && boardState[row] && boardState[row][col] === pawnSymbol) {
-                safety += 15;
-            }
-        }
-    }
-    
-    return safety;
 }
 
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
@@ -1673,7 +1672,6 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Try opening book first if available (only for early game)
     if (enhancedAI && moveHistory.length < 12) {
         const openingMoveAlgebraic = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1685,7 +1683,6 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
-    // Check for endgame-specific advice
     const isEndgame = isEndgamePositionForPosition(board);
     if (isEndgame && endgameEngine) {
         console.log("♟️ Endgame phase detected - using specialized endgame evaluation");
@@ -1695,7 +1692,6 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
-    // Use deeper search in endgame for smarter play
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
     console.log(`🔍 AI searching at depth ${searchDepth} with RISK ASSESSMENT${isEndgame ? ' (Endgame mode)' : ''}`);
@@ -1747,7 +1743,6 @@ function findBestMoveWithRiskAssessment() {
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
     
-    // Extend calculations for the selected line
     if (moveTree && SEARCH_CONFIG.useMemory) {
         const extendedVariations = [];
         const newBoardAfterMove = makeTestMoveForPosition(board, 
@@ -1899,7 +1894,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.4.1 (Risk-Aware + Endgame)';
+        difficultyElement.textContent = 'PMTS v2.4.2 (Risk-Aware + Endgame)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2006,7 +2001,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.4.1 + Endgame)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.4.2 + Endgame)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {

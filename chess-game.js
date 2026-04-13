@@ -1,9 +1,8 @@
-// chess-game.js
-// Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.3 - Fixed console commands and endgame engine loading
+// chess-game.js - Enhanced chess game with Advanced AI Strategies v2.5
+// VERSION: 2.5.0 - Added Threat Detection, King Safety, Pawn Structure, Mobility with Attack Tables, Tapered Evaluation, and SEE
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.1)
 
-const GAME_VERSION = "2.4.3";
+const GAME_VERSION = "2.5.0";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -223,6 +222,39 @@ const PIECE_VALUES = {
     '': 0
 };
 
+// King safety piece-square tables (encourages king safety)
+const KING_SAFETY_TABLE = {
+    '♔': [
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-20, -30, -30, -40, -40, -30, -30, -20],
+        [-10, -20, -20, -20, -20, -20, -20, -10],
+        [20, 20, 0, 0, 0, 0, 20, 20],
+        [20, 30, 10, 0, 0, 10, 30, 20]
+    ],
+    '♚': [
+        [20, 30, 10, 0, 0, 10, 30, 20],
+        [20, 20, 0, 0, 0, 0, 20, 20],
+        [-10, -20, -20, -20, -20, -20, -20, -10],
+        [-20, -30, -30, -40, -40, -30, -30, -20],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30],
+        [-30, -40, -40, -50, -50, -40, -40, -30]
+    ]
+};
+
+// Pawn structure evaluation tables
+const PAWN_STRUCTURE = {
+    doubledPenalty: 20,
+    isolatedPenalty: 25,
+    backwardPenalty: 15,
+    passedBonus: 30,
+    connectedBonus: 10
+};
+
 const PIECE_SQUARE_TABLES = {
     '♙': [
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -285,6 +317,624 @@ const PIECE_SQUARE_TABLES = {
         [20, 30, 10, 0, 0, 10, 30, 20]
     ]
 };
+
+// ========== NEW: ATTACK TABLE & MOBILITY SYSTEM ==========
+class AttackTable {
+    constructor() {
+        this.attackMap = new Map();
+        this.pieceSquareControl = new Array(8).fill().map(() => new Array(8).fill(0));
+    }
+
+    calculateAttacks(boardState, player) {
+        const attacks = new Array(8).fill().map(() => new Array(8).fill(0));
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    this.addPieceAttacks(boardState, piece, row, col, attacks);
+                }
+            }
+        }
+        
+        return attacks;
+    }
+
+    addPieceAttacks(boardState, piece, row, col, attacks) {
+        const pieceCode = pieceMap[piece];
+        const directions = this.getPieceDirections(pieceCode);
+        
+        for (const dir of directions) {
+            let newRow = row + dir.dx;
+            let newCol = col + dir.dy;
+            
+            while (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+                attacks[newRow][newCol]++;
+                
+                const targetPiece = boardState[newRow][newCol];
+                if (targetPiece) break;
+                
+                if (!dir.sliding) break;
+                newRow += dir.dx;
+                newCol += dir.dy;
+            }
+        }
+    }
+
+    getPieceDirections(pieceCode) {
+        switch (pieceCode.toLowerCase()) {
+            case 'p':
+                const dir = pieceCode === 'P' ? -1 : 1;
+                return [
+                    {dx: dir, dy: -1, sliding: false},
+                    {dx: dir, dy: 1, sliding: false}
+                ];
+            case 'n':
+                return [
+                    {dx: -2, dy: -1}, {dx: -2, dy: 1},
+                    {dx: -1, dy: -2}, {dx: -1, dy: 2},
+                    {dx: 1, dy: -2}, {dx: 1, dy: 2},
+                    {dx: 2, dy: -1}, {dx: 2, dy: 1}
+                ].map(d => ({...d, sliding: false}));
+            case 'k':
+                return [
+                    {dx: -1, dy: -1}, {dx: -1, dy: 0}, {dx: -1, dy: 1},
+                    {dx: 0, dy: -1}, {dx: 0, dy: 1},
+                    {dx: 1, dy: -1}, {dx: 1, dy: 0}, {dx: 1, dy: 1}
+                ].map(d => ({...d, sliding: false}));
+            case 'b':
+                return [
+                    {dx: -1, dy: -1, sliding: true},
+                    {dx: -1, dy: 1, sliding: true},
+                    {dx: 1, dy: -1, sliding: true},
+                    {dx: 1, dy: 1, sliding: true}
+                ];
+            case 'r':
+                return [
+                    {dx: -1, dy: 0, sliding: true},
+                    {dx: 1, dy: 0, sliding: true},
+                    {dx: 0, dy: -1, sliding: true},
+                    {dx: 0, dy: 1, sliding: true}
+                ];
+            case 'q':
+                return [
+                    {dx: -1, dy: -1, sliding: true}, {dx: -1, dy: 0, sliding: true}, {dx: -1, dy: 1, sliding: true},
+                    {dx: 0, dy: -1, sliding: true}, {dx: 0, dy: 1, sliding: true},
+                    {dx: 1, dy: -1, sliding: true}, {dx: 1, dy: 0, sliding: true}, {dx: 1, dy: 1, sliding: true}
+                ];
+            default:
+                return [];
+        }
+    }
+
+    getMobilityScore(boardState, player) {
+        let mobilityScore = 0;
+        const mobilityBonus = 5;
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    const moves = this.getPieceMoves(boardState, piece, row, col);
+                    mobilityScore += moves.length * mobilityBonus;
+                }
+            }
+        }
+        
+        return mobilityScore;
+    }
+
+    getPieceMoves(boardState, piece, row, col) {
+        const moves = [];
+        const pieceCode = pieceMap[piece];
+        const directions = this.getPieceDirections(pieceCode);
+        
+        for (const dir of directions) {
+            let newRow = row + dir.dx;
+            let newCol = col + dir.dy;
+            
+            while (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+                const targetPiece = boardState[newRow][newCol];
+                if (!targetPiece || !isPlayerPieceForPosition(targetPiece, currentPlayer)) {
+                    moves.push({row: newRow, col: newCol});
+                }
+                if (targetPiece || !dir.sliding) break;
+                newRow += dir.dx;
+                newCol += dir.dy;
+            }
+        }
+        
+        return moves;
+    }
+}
+
+// ========== NEW: THREAT DETECTION SYSTEM ==========
+class ThreatDetector {
+    constructor() {
+        this.threatCache = new Map();
+    }
+
+    detectThreats(boardState, player) {
+        const threats = [];
+        const opponent = player === 'white' ? 'black' : 'white';
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, opponent)) {
+                    const attacks = this.getPieceThreats(boardState, piece, row, col, player);
+                    threats.push(...attacks);
+                }
+            }
+        }
+        
+        return threats;
+    }
+
+    getPieceThreats(boardState, piece, row, col, defendingPlayer) {
+        const threats = [];
+        const pieceCode = pieceMap[piece];
+        const directions = this.getAttackDirections(pieceCode);
+        
+        for (const dir of directions) {
+            let newRow = row + dir.dx;
+            let newCol = col + dir.dy;
+            
+            while (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+                const targetPiece = boardState[newRow][newCol];
+                if (targetPiece && isPlayerPieceForPosition(targetPiece, defendingPlayer)) {
+                    threats.push({
+                        attacker: piece,
+                        attackerPos: {row, col},
+                        target: targetPiece,
+                        targetPos: {row: newRow, col: newCol},
+                        pieceValue: PIECE_VALUES[targetPiece] || 0
+                    });
+                    break;
+                }
+                if (targetPiece || !dir.sliding) break;
+                newRow += dir.dx;
+                newCol += dir.dy;
+            }
+        }
+        
+        return threats;
+    }
+
+    getAttackDirections(pieceCode) {
+        const baseDirections = {
+            'p': [{dx: pieceCode === 'P' ? -1 : 1, dy: -1, sliding: false}, 
+                  {dx: pieceCode === 'P' ? -1 : 1, dy: 1, sliding: false}],
+            'n': [{dx: -2, dy: -1}, {dx: -2, dy: 1}, {dx: -1, dy: -2}, {dx: -1, dy: 2},
+                  {dx: 1, dy: -2}, {dx: 1, dy: 2}, {dx: 2, dy: -1}, {dx: 2, dy: 1}],
+            'k': [{dx: -1, dy: -1}, {dx: -1, dy: 0}, {dx: -1, dy: 1}, {dx: 0, dy: -1},
+                  {dx: 0, dy: 1}, {dx: 1, dy: -1}, {dx: 1, dy: 0}, {dx: 1, dy: 1}],
+            'b': [{dx: -1, dy: -1, sliding: true}, {dx: -1, dy: 1, sliding: true},
+                  {dx: 1, dy: -1, sliding: true}, {dx: 1, dy: 1, sliding: true}],
+            'r': [{dx: -1, dy: 0, sliding: true}, {dx: 1, dy: 0, sliding: true},
+                  {dx: 0, dy: -1, sliding: true}, {dx: 0, dy: 1, sliding: true}],
+            'q': [{dx: -1, dy: -1, sliding: true}, {dx: -1, dy: 0, sliding: true}, {dx: -1, dy: 1, sliding: true},
+                  {dx: 0, dy: -1, sliding: true}, {dx: 0, dy: 1, sliding: true},
+                  {dx: 1, dy: -1, sliding: true}, {dx: 1, dy: 0, sliding: true}, {dx: 1, dy: 1, sliding: true}]
+        };
+        
+        return baseDirections[pieceCode.toLowerCase()] || [];
+    }
+
+    calculateThreatScore(threats) {
+        let score = 0;
+        for (const threat of threats) {
+            score += threat.pieceValue * 0.3; // 30% of piece value as threat penalty
+        }
+        return score;
+    }
+}
+
+// ========== NEW: KING SAFETY MODULE ==========
+class KingSafetyModule {
+    constructor() {
+        this.pawnShieldBonus = 30;
+        this.kingTropismWeight = 10;
+    }
+
+    evaluateKingSafety(boardState, player) {
+        const kingPos = this.findKing(boardState, player);
+        if (!kingPos) return 0;
+        
+        let safetyScore = 0;
+        
+        // Pawn shield evaluation
+        safetyScore += this.evaluatePawnShield(boardState, kingPos, player);
+        
+        // Piece proximity to king (enemy pieces near king are bad)
+        safetyScore -= this.evaluateEnemyProximity(boardState, kingPos, player);
+        
+        // King exposure (open files/ranks near king)
+        safetyScore -= this.evaluateKingExposure(boardState, kingPos, player);
+        
+        // King tropism (how centralized enemy pieces are pointing at king)
+        safetyScore -= this.evaluateKingTropism(boardState, kingPos, player);
+        
+        return safetyScore;
+    }
+
+    findKing(boardState, player) {
+        const kingSymbol = player === 'white' ? '♔' : '♚';
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                if (boardState[row] && boardState[row][col] === kingSymbol) {
+                    return {row, col};
+                }
+            }
+        }
+        return null;
+    }
+
+    evaluatePawnShield(boardState, kingPos, player) {
+        let shieldScore = 0;
+        const pawnDirection = player === 'white' ? -1 : 1;
+        const shieldRows = [kingPos.row + pawnDirection];
+        
+        for (const row of shieldRows) {
+            if (row >= 0 && row < 8) {
+                for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
+                    if (col >= 0 && col < 8) {
+                        const piece = boardState[row][col];
+                        const expectedPawn = player === 'white' ? '♙' : '♟';
+                        if (piece === expectedPawn) {
+                            shieldScore += this.pawnShieldBonus;
+                        } else if (!piece) {
+                            shieldScore -= 10; // Missing pawn shield
+                        }
+                    }
+                }
+            }
+        }
+        
+        return shieldScore;
+    }
+
+    evaluateEnemyProximity(boardState, kingPos, player) {
+        let proximityScore = 0;
+        const opponent = player === 'white' ? 'black' : 'white';
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, opponent)) {
+                    const distance = Math.abs(row - kingPos.row) + Math.abs(col - kingPos.col);
+                    const pieceValue = PIECE_VALUES[piece] || 0;
+                    if (distance <= 2) {
+                        proximityScore += pieceValue / distance;
+                    }
+                }
+            }
+        }
+        
+        return proximityScore;
+    }
+
+    evaluateKingExposure(boardState, kingPos, player) {
+        let exposureScore = 0;
+        const directions = [[-1,0], [1,0], [0,-1], [0,1], [-1,-1], [-1,1], [1,-1], [1,1]];
+        
+        for (const [dx, dy] of directions) {
+            let newRow = kingPos.row + dx;
+            let newCol = kingPos.col + dy;
+            let openSquares = 0;
+            
+            while (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+                const piece = boardState[newRow][newCol];
+                if (piece) {
+                    if (!isPlayerPieceForPosition(piece, player)) {
+                        exposureScore += 15; // Enemy piece on open line to king
+                    }
+                    break;
+                }
+                openSquares++;
+                newRow += dx;
+                newCol += dy;
+            }
+            
+            exposureScore += openSquares * 2;
+        }
+        
+        return exposureScore;
+    }
+
+    evaluateKingTropism(boardState, kingPos, player) {
+        let tropismScore = 0;
+        const opponent = player === 'white' ? 'black' : 'white';
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, opponent)) {
+                    const distance = Math.abs(row - kingPos.row) + Math.abs(col - kingPos.col);
+                    const pieceValue = PIECE_VALUES[piece] || 0;
+                    tropismScore += pieceValue / (distance + 1);
+                }
+            }
+        }
+        
+        return tropismScore;
+    }
+}
+
+// ========== NEW: PAWN STRUCTURE EVALUATION ==========
+class PawnStructureEvaluator {
+    constructor() {
+        this.cache = new Map();
+    }
+
+    evaluatePawnStructure(boardState, player) {
+        const pawns = this.getPawns(boardState, player);
+        let structureScore = 0;
+        
+        // Doubled pawns penalty
+        structureScore -= this.evaluateDoubledPawns(pawns) * PAWN_STRUCTURE.doubledPenalty;
+        
+        // Isolated pawns penalty
+        structureScore -= this.evaluateIsolatedPawns(pawns, boardState, player) * PAWN_STRUCTURE.isolatedPenalty;
+        
+        // Backward pawns penalty
+        structureScore -= this.evaluateBackwardPawns(pawns, boardState, player) * PAWN_STRUCTURE.backwardPenalty;
+        
+        // Passed pawns bonus
+        structureScore += this.evaluatePassedPawns(pawns, boardState, player) * PAWN_STRUCTURE.passedBonus;
+        
+        // Connected pawns bonus
+        structureScore += this.evaluateConnectedPawns(pawns) * PAWN_STRUCTURE.connectedBonus;
+        
+        return structureScore;
+    }
+
+    getPawns(boardState, player) {
+        const pawns = [];
+        const pawnSymbol = player === 'white' ? '♙' : '♟';
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                if (boardState[row] && boardState[row][col] === pawnSymbol) {
+                    pawns.push({row, col});
+                }
+            }
+        }
+        
+        return pawns;
+    }
+
+    evaluateDoubledPawns(pawns) {
+        const columnCount = new Array(8).fill(0);
+        for (const pawn of pawns) {
+            columnCount[pawn.col]++;
+        }
+        
+        let doubledCount = 0;
+        for (const count of columnCount) {
+            if (count > 1) doubledCount += (count - 1);
+        }
+        
+        return doubledCount;
+    }
+
+    evaluateIsolatedPawns(pawns, boardState, player) {
+        let isolatedCount = 0;
+        const columnsWithPawns = new Set(pawns.map(p => p.col));
+        
+        for (const pawn of pawns) {
+            const hasNeighbor = columnsWithPawns.has(pawn.col - 1) || columnsWithPawns.has(pawn.col + 1);
+            if (!hasNeighbor) isolatedCount++;
+        }
+        
+        return isolatedCount;
+    }
+
+    evaluateBackwardPawns(pawns, boardState, player) {
+        let backwardCount = 0;
+        const direction = player === 'white' ? -1 : 1;
+        
+        for (const pawn of pawns) {
+            const forwardRow = pawn.row + direction;
+            if (forwardRow >= 0 && forwardRow < 8) {
+                const hasSupport = this.hasPawnSupport(pawns, pawn.row, pawn.col, direction);
+                const isBlocked = boardState[forwardRow] && boardState[forwardRow][pawn.col];
+                if (!hasSupport && isBlocked) backwardCount++;
+            }
+        }
+        
+        return backwardCount;
+    }
+
+    evaluatePassedPawns(pawns, boardState, player) {
+        let passedCount = 0;
+        const direction = player === 'white' ? -1 : 1;
+        const opponent = player === 'white' ? 'black' : 'white';
+        const opponentPawns = this.getPawns(boardState, opponent);
+        
+        for (const pawn of pawns) {
+            let isPassed = true;
+            const opponentColumns = opponentPawns.map(p => p.col);
+            
+            for (let row = pawn.row + direction; row >= 0 && row < 8; row += direction) {
+                if (opponentColumns.includes(pawn.col - 1) || 
+                    opponentColumns.includes(pawn.col) || 
+                    opponentColumns.includes(pawn.col + 1)) {
+                    isPassed = false;
+                    break;
+                }
+            }
+            
+            if (isPassed) passedCount++;
+        }
+        
+        return passedCount;
+    }
+
+    evaluateConnectedPawns(pawns) {
+        let connectedPairs = 0;
+        
+        for (let i = 0; i < pawns.length; i++) {
+            for (let j = i + 1; j < pawns.length; j++) {
+                if (Math.abs(pawns[i].col - pawns[j].col) === 1 && 
+                    Math.abs(pawns[i].row - pawns[j].row) <= 1) {
+                    connectedPairs++;
+                }
+            }
+        }
+        
+        return connectedPairs;
+    }
+
+    hasPawnSupport(pawns, row, col, direction) {
+        const supportingRow = row - direction;
+        return pawns.some(p => p.row === supportingRow && Math.abs(p.col - col) === 1);
+    }
+}
+
+// ========== NEW: SEE (Swap Evaluation) ==========
+class SwapEvaluator {
+    evaluateCapture(boardState, fromRow, fromCol, toRow, toCol, player) {
+        const attacker = boardState[fromRow][fromCol];
+        const victim = boardState[toRow][toCol];
+        
+        if (!attacker || !victim) return 0;
+        
+        const attackerValue = PIECE_VALUES[attacker] || 0;
+        const victimValue = PIECE_VALUES[victim] || 0;
+        
+        // If capturing a less valuable piece, it's probably good
+        if (victimValue > attackerValue) return victimValue;
+        
+        // Simulate the exchange
+        const simulatedBoard = this.simulateCapture(boardState, fromRow, fromCol, toRow, toCol);
+        const nextAttacker = this.findSmallestAttacker(simulatedBoard, toRow, toCol, player === 'white' ? 'black' : 'white');
+        
+        if (!nextAttacker) return victimValue;
+        
+        // Recursively evaluate the exchange
+        const nextCaptureValue = this.evaluateCapture(
+            simulatedBoard, 
+            nextAttacker.fromRow, 
+            nextAttacker.fromCol, 
+            toRow, toCol, 
+            player === 'white' ? 'black' : 'white'
+        );
+        
+        return Math.max(0, victimValue - nextCaptureValue);
+    }
+
+    simulateCapture(boardState, fromRow, fromCol, toRow, toCol) {
+        const newBoard = boardState.map(row => [...row]);
+        newBoard[toRow][toCol] = newBoard[fromRow][fromCol];
+        newBoard[fromRow][fromCol] = '';
+        return newBoard;
+    }
+
+    findSmallestAttacker(boardState, targetRow, targetCol, player) {
+        let smallestAttacker = null;
+        let smallestValue = Infinity;
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    if (this.canAttack(boardState, row, col, targetRow, targetCol)) {
+                        const pieceValue = PIECE_VALUES[piece] || 0;
+                        if (pieceValue < smallestValue) {
+                            smallestValue = pieceValue;
+                            smallestAttacker = {fromRow: row, fromCol: col};
+                        }
+                    }
+                }
+            }
+        }
+        
+        return smallestAttacker;
+    }
+
+    canAttack(boardState, fromRow, fromCol, toRow, toCol) {
+        const piece = boardState[fromRow][fromCol];
+        if (!piece) return false;
+        
+        const pieceCode = pieceMap[piece];
+        const dx = toCol - fromCol;
+        const dy = toRow - fromRow;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        
+        switch (pieceCode.toLowerCase()) {
+            case 'p':
+                const direction = pieceCode === 'P' ? -1 : 1;
+                return absDx === 1 && dy === direction;
+            case 'n':
+                return (absDx === 2 && absDy === 1) || (absDx === 1 && absDy === 2);
+            case 'k':
+                return absDx <= 1 && absDy <= 1;
+            case 'b':
+                return absDx === absDy && this.isPathClear(boardState, fromRow, fromCol, toRow, toCol);
+            case 'r':
+                return (dx === 0 || dy === 0) && this.isPathClear(boardState, fromRow, fromCol, toRow, toCol);
+            case 'q':
+                return (dx === 0 || dy === 0 || absDx === absDy) && this.isPathClear(boardState, fromRow, fromCol, toRow, toCol);
+            default:
+                return false;
+        }
+    }
+
+    isPathClear(boardState, fromRow, fromCol, toRow, toCol) {
+        const dx = Math.sign(toCol - fromCol);
+        const dy = Math.sign(toRow - fromRow);
+        let currentRow = fromRow + dy;
+        let currentCol = fromCol + dx;
+        
+        while (currentRow !== toRow || currentCol !== toCol) {
+            if (boardState[currentRow] && boardState[currentRow][currentCol]) return false;
+            currentRow += dy;
+            currentCol += dx;
+        }
+        
+        return true;
+    }
+}
+
+// ========== NEW: TAPERED EVALUATION ==========
+class TaperedEvaluator {
+    constructor() {
+        this.middlegameWeight = 1.0;
+        this.endgameWeight = 0.0;
+        this.totalPhase = 24; // Max phase (opening/middlegame)
+    }
+
+    calculatePhase(boardState) {
+        let phase = 0;
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece) {
+                    const pieceCode = pieceMap[piece];
+                    switch (pieceCode.toLowerCase()) {
+                        case 'q': phase += 4; break;
+                        case 'r': phase += 2; break;
+                        case 'b': case 'n': phase += 1; break;
+                        case 'p': phase += 0; break;
+                    }
+                }
+            }
+        }
+        
+        this.endgameWeight = Math.max(0, Math.min(1, (this.totalPhase - phase) / this.totalPhase));
+        this.middlegameWeight = 1 - this.endgameWeight;
+        
+        return { middlegame: this.middlegameWeight, endgame: this.endgameWeight };
+    }
+
+    evaluatePosition(boardState, middlegameScore, endgameScore) {
+        const weights = this.calculatePhase(boardState);
+        return (middlegameScore * weights.middlegame) + (endgameScore * weights.endgame);
+    }
+}
 
 // ========== CONSOLE COMMANDS ==========
 
@@ -502,7 +1152,7 @@ window.ai = function() {
         console.log("⚠️ It's your turn! Make a move or switch sides.");
         return;
     }
-    console.log("🤖 AI is thinking...");
+    console.log("🤖 AI is thinking with v2.5 enhanced evaluation...");
     makeAIMove();
     return "AI move initiated";
 };
@@ -595,9 +1245,41 @@ window.clearMemory = function() {
     return "Memory cleared";
 };
 
+window.analyzePosition = function() {
+    console.log("\n=== ADVANCED POSITION ANALYSIS ===");
+    
+    const threatDetector = new ThreatDetector();
+    const threats = threatDetector.detectThreats(board, currentPlayer);
+    console.log(`🎯 Threats detected: ${threats.length}`);
+    threats.forEach(t => {
+        console.log(`   ${t.attacker} at (${t.attackerPos.row},${t.attackerPos.col}) threatens ${t.target} at (${t.targetPos.row},${t.targetPos.col}) (value: ${t.pieceValue})`);
+    });
+    
+    const kingSafety = new KingSafetyModule();
+    const whiteKingSafety = kingSafety.evaluateKingSafety(board, 'white');
+    const blackKingSafety = kingSafety.evaluateKingSafety(board, 'black');
+    console.log(`👑 King safety - White: ${whiteKingSafety}, Black: ${blackKingSafety}`);
+    
+    const pawnStructure = new PawnStructureEvaluator();
+    const whitePawnScore = pawnStructure.evaluatePawnStructure(board, 'white');
+    const blackPawnScore = pawnStructure.evaluatePawnStructure(board, 'black');
+    console.log(`♙ Pawn structure - White: ${whitePawnScore}, Black: ${blackPawnScore}`);
+    
+    const attackTable = new AttackTable();
+    const whiteMobility = attackTable.getMobilityScore(board, 'white');
+    const blackMobility = attackTable.getMobilityScore(board, 'black');
+    console.log(`🏃 Mobility - White: ${whiteMobility}, Black: ${blackMobility}`);
+    
+    const taperedEval = new TaperedEvaluator();
+    const weights = taperedEval.calculatePhase(board);
+    console.log(`⚖️ Game phase - Middlegame: ${(weights.middlegame * 100).toFixed(1)}%, Endgame: ${(weights.endgame * 100).toFixed(1)}%`);
+    
+    return "Analysis complete";
+};
+
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS                       ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.5                  ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board in console");
@@ -610,6 +1292,7 @@ window.help = function() {
     console.log("  undo()             - Undo last move");
     console.log("\n🤖 AI & EVALUATION:");
     console.log("  eval()             - Evaluate current position");
+    console.log("  analyzePosition()  - Advanced position analysis (NEW!)");
     console.log("  ai()               - Force AI to make a move");
     console.log("  setDepth(n)        - Set AI search depth (1-6)");
     console.log("  setMode('ai/player') - Switch game mode");
@@ -621,12 +1304,13 @@ window.help = function() {
     console.log("  newGame()          - Start a new game");
     console.log("  clearMemory()      - Clear AI memory cache");
     console.log("  help()             - Show this help message");
-    console.log("\n📝 EXAMPLE SEQUENCE:");
-    console.log("  setup('endgame_king_pawn')  - Load endgame position");
-    console.log("  eval()                      - Evaluate position");
-    console.log("  legalMoves()                - See available moves");
-    console.log("  move('d4d5')                - Make a move");
-    console.log("  ai()                        - Let AI respond");
+    console.log("\n📝 NEW FEATURES IN v2.5:");
+    console.log("  • Threat Detection - Identifies opponent threats");
+    console.log("  • King Safety - Evaluates king protection");
+    console.log("  • Pawn Structure - Detects doubled/isolated/passed pawns");
+    console.log("  • Mobility with Attack Tables - Piece activity evaluation");
+    console.log("  • Tapered Evaluation - Gradual phase transition");
+    console.log("  • SEE - Swap evaluation for captures");
     console.log("\n");
     return "Help displayed above";
 };
@@ -712,13 +1396,21 @@ class RiskAssessment {
 
 let riskAssessor = new RiskAssessment();
 
+// Initialize new AI modules
+let attackTable = new AttackTable();
+let threatDetector = new ThreatDetector();
+let kingSafetyModule = new KingSafetyModule();
+let pawnStructureEval = new PawnStructureEvaluator();
+let swapEvaluator = new SwapEvaluator();
+let taperedEvaluator = new TaperedEvaluator();
+
 // ========== CORE GAME FUNCTIONS ==========
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment & Endgame Engine`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Advanced AI with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Eval & SEE`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
-    console.log(`🎯 Risk Assessment: Avoids lines with potential big losses`);
+    console.log(`🎯 New Features: Threat Detection | King Safety | Pawn Structure | Mobility | Tapered Evaluation | SEE`);
     console.log(`🔄 Dynamic Extension: Extends calculations for active line only`);
     if (endgameEngine) {
         console.log(`📚 Endgame Engine v${endgameEngine.version} loaded!`);
@@ -726,6 +1418,7 @@ function displayVersion() {
         console.log(`📚 Endgame Engine: Not loaded (chess-endgame.js missing)`);
     }
     console.log(`\n💡 Type 'help()' in console to see available commands!`);
+    console.log(`💡 Type 'analyzePosition()' for advanced position analysis!`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -764,8 +1457,8 @@ window.addEventListener('load', function() {
     changeGameMode();
     displayVersion();
     
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
-    console.log(`💡 Console commands available: help(), board(), setFEN(), move(), eval(), ai(), stats(), etc.`);
+    console.log(`♔ Chess Game v${GAME_VERSION} Loaded with Advanced AI! ♛`);
+    console.log(`💡 Console commands available: help(), board(), setFEN(), move(), eval(), analyzePosition(), ai(), stats(), etc.`);
 });
 
 function createBoard() {
@@ -1301,7 +1994,7 @@ function updateMoveHistory() {
     moveListElement.textContent = formattedMoves.join(' ');
 }
 
-// ========== POSITION EVALUATION FUNCTIONS ==========
+// ========== ENHANCED POSITION EVALUATION FUNCTIONS (v2.5) ==========
 
 function isPlayerPieceForPosition(piece, player) {
     if (!piece) return false;
@@ -1500,8 +2193,9 @@ function isEndgamePositionForPosition(boardState) {
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
-    let evaluation = 0;
-    const isEndgame = isEndgamePositionForPosition(boardState);
+    // Calculate middlegame and endgame scores separately for tapered evaluation
+    let middlegameScore = 0;
+    let endgameScore = 0;
     
     // Material evaluation
     let whiteMaterial = 0;
@@ -1520,64 +2214,88 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             }
         }
     }
-    evaluation = whiteMaterial - blackMaterial;
+    
+    const materialScore = whiteMaterial - blackMaterial;
+    middlegameScore += materialScore;
+    endgameScore += materialScore;
 
-    // Positional evaluation
+    // Positional evaluation with piece-square tables
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece) {
                 let tableValue = 0;
                 
-                if (isEndgame && endgameEngine && endgameEngine.endgamePieceTables && endgameEngine.endgamePieceTables[piece]) {
+                if (isEndgamePositionForPosition(boardState) && endgameEngine && endgameEngine.endgamePieceTables && endgameEngine.endgamePieceTables[piece]) {
                     tableValue = endgameEngine.getEndgamePieceSquareValue(piece, row, col);
                 } else if (PIECE_SQUARE_TABLES[piece]) {
                     tableValue = PIECE_SQUARE_TABLES[piece][row][col];
                 }
                 
                 if (isPlayerPieceForPosition(piece, 'white')) {
-                    evaluation += tableValue;
+                    middlegameScore += tableValue;
+                    endgameScore += tableValue;
                 } else {
-                    evaluation -= tableValue;
+                    middlegameScore -= tableValue;
+                    endgameScore -= tableValue;
                 }
             }
         }
     }
 
-    // Endgame-specific evaluation
-    if (isEndgame && endgameEngine && endgameEngine.evaluateEndgamePosition) {
-        const endgameScore = endgameEngine.evaluateEndgamePosition(boardState, player, "early_endgame");
-        if (player === 'white') {
-            evaluation += endgameScore;
-        } else {
-            evaluation -= endgameScore;
-        }
+    // NEW: Threat Detection Score
+    const threats = threatDetector.detectThreats(boardState, player);
+    const threatScore = threatDetector.calculateThreatScore(threats);
+    if (player === 'white') {
+        middlegameScore -= threatScore;
+        endgameScore -= threatScore;
+    } else {
+        middlegameScore += threatScore;
+        endgameScore += threatScore;
     }
 
-    // Center control
-    const centerBonus = isEndgame ? 15 : 30;
+    // NEW: King Safety Score
+    const whiteKingSafety = kingSafetyModule.evaluateKingSafety(boardState, 'white');
+    const blackKingSafety = kingSafetyModule.evaluateKingSafety(boardState, 'black');
+    middlegameScore += (whiteKingSafety - blackKingSafety);
+    endgameScore += (whiteKingSafety - blackKingSafety);
+
+    // NEW: Pawn Structure Score
+    const whitePawnScore = pawnStructureEval.evaluatePawnStructure(boardState, 'white');
+    const blackPawnScore = pawnStructureEval.evaluatePawnStructure(boardState, 'black');
+    middlegameScore += (whitePawnScore - blackPawnScore);
+    endgameScore += (whitePawnScore - blackPawnScore);
+
+    // NEW: Mobility Score (more important in middlegame)
+    const whiteMobility = attackTable.getMobilityScore(boardState, 'white');
+    const blackMobility = attackTable.getMobilityScore(boardState, 'black');
+    const mobilityWeight = 5;
+    middlegameScore += (whiteMobility - blackMobility) * mobilityWeight;
+    endgameScore += (whiteMobility - blackMobility) * (mobilityWeight * 0.7);
+
+    // Center control (more important in middlegame)
+    const centerBonus = 30;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r] && boardState[r][c];
         if (piece) {
             if (isPlayerPieceForPosition(piece, 'white')) {
-                evaluation += centerBonus;
+                middlegameScore += centerBonus;
+                endgameScore += centerBonus * 0.5;
             } else {
-                evaluation -= centerBonus;
+                middlegameScore -= centerBonus;
+                endgameScore -= centerBonus * 0.5;
             }
         }
     }
 
-    // Mobility
-    const mobilityWeight = isEndgame ? 8 : 5;
-    const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
-    const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
-    evaluation += (whiteMoves - blackMoves) * mobilityWeight;
-
-    return evaluation;
+    // Apply tapered evaluation
+    const finalScore = taperedEvaluator.evaluatePosition(boardState, middlegameScore, endgameScore);
+    
+    return finalScore;
 }
 
-// ========== MINIMAX WITH RISK ASSESSMENT ==========
+// ========== MINIMAX WITH ENHANCED EVALUATION ==========
 
 const SEARCH_CONFIG = {
     baseDepth: 3,
@@ -1603,12 +2321,34 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
+    // Sort moves using SEE for better pruning
+    moves.sort((a, b) => {
+        const pieceA = boardState[a.fromRow][a.fromCol];
+        const pieceB = boardState[b.fromRow][b.fromCol];
+        const targetA = boardState[a.toRow][a.toCol];
+        const targetB = boardState[b.toRow][b.toCol];
+        
+        const seeA = targetA ? swapEvaluator.evaluateCapture(boardState, a.fromRow, a.fromCol, a.toRow, a.toCol, player) : 0;
+        const seeB = targetB ? swapEvaluator.evaluateCapture(boardState, b.fromRow, b.fromCol, b.toRow, b.toCol, player) : 0;
+        
+        return seeB - seeA;
+    });
+
     if (isMaximizingPlayer) {
         let maxEval = -Infinity;
         let worstCaseEval = Infinity;
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
+            // Skip bad captures based on SEE
+            const targetPiece = boardState[move.toRow][move.toCol];
+            if (targetPiece) {
+                const seeValue = swapEvaluator.evaluateCapture(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                if (seeValue < 0 && depth > 1) {
+                    continue; // Prune bad captures
+                }
+            }
+            
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, false, nextPlayer, moveNumber + 1, trackWorstCase);
             
@@ -1630,6 +2370,15 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
+            // Skip bad captures based on SEE
+            const targetPiece = boardState[move.toRow][move.toCol];
+            if (targetPiece) {
+                const seeValue = swapEvaluator.evaluateCapture(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                if (seeValue < 0 && depth > 1) {
+                    continue; // Prune bad captures
+                }
+            }
+            
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, trackWorstCase);
             
@@ -1674,7 +2423,7 @@ function findBestMoveWithRiskAssessment() {
     
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 AI searching at depth ${searchDepth} with RISK ASSESSMENT${isEndgame ? ' (Endgame mode)' : ''}`);
+    console.log(`🔍 AI searching at depth ${searchDepth} with ENHANCED v2.5 evaluation (Threats, King Safety, Pawn Structure, Mobility, Tapered Eval, SEE)`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -1723,6 +2472,14 @@ function findBestMoveWithRiskAssessment() {
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
     
+    // Log detailed analysis for the chosen move
+    console.log(`📊 Move analysis:`, {
+        threatScore: threatDetector.calculateThreatScore(threatDetector.detectThreats(board, currentPlayer)),
+        kingSafety: kingSafetyModule.evaluateKingSafety(board, currentPlayer),
+        pawnStructure: pawnStructureEval.evaluatePawnStructure(board, currentPlayer),
+        mobility: attackTable.getMobilityScore(board, currentPlayer)
+    });
+    
     if (moveTree && SEARCH_CONFIG.useMemory) {
         const extendedVariations = [];
         const newBoardAfterMove = makeTestMoveForPosition(board, 
@@ -1766,7 +2523,7 @@ function makeAIMove() {
 
     if (thinkingElement) thinkingElement.style.display = 'block';
     if (syncStatusElement) {
-        syncStatusElement.textContent = 'AI thinking with risk assessment...';
+        syncStatusElement.textContent = 'AI thinking with v2.5 enhanced evaluation...';
         syncStatusElement.classList.add('thinking');
     }
 
@@ -1804,7 +2561,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.4.3 (Risk-Aware + Endgame)';
+        difficultyElement.textContent = 'PMTS v2.5 (Threats + King Safety + Pawns + Mobility + Tapered + SEE)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -1861,7 +2618,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with PMTS, Opening Book, and Endgame Engine!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Evaluation & SEE!`);
 }
 
 function undoMove() {
@@ -1911,7 +2668,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.4.3 + Endgame)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.5 + Threats + King Safety + Pawns + Mobility)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -1947,6 +2704,8 @@ if (typeof window !== 'undefined') {
         }
         return ["Endgame engine not loaded"];
     };
+    window.analyzePosition = window.analyzePosition;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - PMTS with Risk Assessment, Opening Book, and Endgame Engine!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Advanced AI with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Evaluation & SEE!`);
+console.log(`🎯 New features: analyzePosition() for detailed position analysis!`);

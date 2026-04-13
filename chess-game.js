@@ -1,39 +1,61 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.2 - Added Time Controls + Improved AI for Black
+// VERSION: 2.3.3 - Fixed Time Control (starts immediately, decrements properly)
 // COMPATIBLE WITH: chess-ai-database.js (v2.0)
 
-const GAME_VERSION = "2.3.2";
+const GAME_VERSION = "2.3.3";
 
-// ========== TIME CONTROL SYSTEM ==========
+// ========== TIME CONTROL SYSTEM (FIXED) ==========
 class TimeControl {
     constructor() {
         this.initialTime = 600; // 10 minutes in seconds
         this.increment = 5; // 5 seconds per move
         this.whiteTime = this.initialTime;
         this.blackTime = this.initialTime;
-        this.activePlayer = null;
+        this.activePlayer = 'white';
         this.timerInterval = null;
         this.isActive = false;
+        this.lastTick = 0;
     }
     
     start(player) {
-        this.activePlayer = player;
+        // Stop any existing timer first
+        this.stop();
+        
+        this.activePlayer = player || 'white';
         this.isActive = true;
+        this.lastTick = Date.now();
         this.startTimer();
+        this.updateDisplay();
+        console.log(`⏰ Timer started for ${this.activePlayer}`);
     }
     
     stop() {
         this.isActive = false;
-        this.activePlayer = null;
         if (this.timerInterval) {
             clearInterval(this.timerInterval);
             this.timerInterval = null;
         }
     }
     
+    pause() {
+        this.isActive = false;
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+    }
+    
+    resume() {
+        if (!this.isActive && !gameOver) {
+            this.isActive = true;
+            this.lastTick = Date.now();
+            this.startTimer();
+        }
+    }
+    
     switchPlayer() {
-        if (!this.isActive) return;
+        if (!this.isActive || gameOver) return;
         
         // Add increment to the player who just moved
         if (this.activePlayer === 'white') {
@@ -44,29 +66,40 @@ class TimeControl {
         
         // Switch active player
         this.activePlayer = this.activePlayer === 'white' ? 'black' : 'white';
+        this.lastTick = Date.now();
         this.updateDisplay();
+        
+        console.log(`⏰ Timer switched to ${this.activePlayer} | White: ${this.formatTime(this.whiteTime)} | Black: ${this.formatTime(this.blackTime)}`);
     }
     
     startTimer() {
-        if (this.timerInterval) clearInterval(this.timerInterval);
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+        }
         
         this.timerInterval = setInterval(() => {
             if (!this.isActive || gameOver) return;
             
+            const now = Date.now();
+            const elapsed = (now - this.lastTick) / 1000; // Convert to seconds
+            this.lastTick = now;
+            
             if (this.activePlayer === 'white') {
-                this.whiteTime = Math.max(0, this.whiteTime - 0.1);
-                if (this.whiteTime <= 0) {
+                this.whiteTime = Math.max(0, this.whiteTime - elapsed);
+                if (this.whiteTime <= 0.01) {
+                    this.whiteTime = 0;
                     this.timeout('white');
                 }
             } else {
-                this.blackTime = Math.max(0, this.blackTime - 0.1);
-                if (this.blackTime <= 0) {
+                this.blackTime = Math.max(0, this.blackTime - elapsed);
+                if (this.blackTime <= 0.01) {
+                    this.blackTime = 0;
                     this.timeout('black');
                 }
             }
             
             this.updateDisplay();
-        }, 100);
+        }, 100); // Update every 100ms for smooth display
     }
     
     timeout(player) {
@@ -76,7 +109,7 @@ class TimeControl {
         
         const statusElement = document.getElementById('status');
         if (statusElement) {
-            statusElement.textContent = `Time out! ${winner} wins!`;
+            statusElement.textContent = `⏰ Time out! ${winner} wins!`;
             statusElement.classList.add('checkmate');
         }
         
@@ -87,26 +120,52 @@ class TimeControl {
     updateDisplay() {
         const whiteTimeElement = document.getElementById('white-time');
         const blackTimeElement = document.getElementById('black-time');
+        const whiteIndicator = document.getElementById('white-active-indicator');
+        const blackIndicator = document.getElementById('black-active-indicator');
         
         if (whiteTimeElement) {
             whiteTimeElement.textContent = this.formatTime(this.whiteTime);
-            whiteTimeElement.style.color = this.whiteTime < 60 ? '#ff4444' : '';
+            if (this.whiteTime < 60) {
+                whiteTimeElement.style.color = '#ff6b6b';
+                whiteTimeElement.style.textShadow = '0 0 10px rgba(255, 107, 107, 0.5)';
+            } else {
+                whiteTimeElement.style.color = '#4CAF50';
+                whiteTimeElement.style.textShadow = '0 0 10px rgba(76, 175, 80, 0.5)';
+            }
         }
         
         if (blackTimeElement) {
             blackTimeElement.textContent = this.formatTime(this.blackTime);
-            blackTimeElement.style.color = this.blackTime < 60 ? '#ff4444' : '';
+            if (this.blackTime < 60) {
+                blackTimeElement.style.color = '#ff6b6b';
+                blackTimeElement.style.textShadow = '0 0 10px rgba(255, 107, 107, 0.5)';
+            } else {
+                blackTimeElement.style.color = '#4CAF50';
+                blackTimeElement.style.textShadow = '0 0 10px rgba(76, 175, 80, 0.5)';
+            }
         }
         
-        // Highlight active player's clock
-        const whiteClock = document.querySelector('.white-clock');
-        const blackClock = document.querySelector('.black-clock');
-        
-        if (whiteClock) {
-            whiteClock.classList.toggle('active-clock', this.activePlayer === 'white' && this.isActive);
+        // Update active indicators
+        if (whiteIndicator) {
+            whiteIndicator.style.display = (this.activePlayer === 'white' && this.isActive) ? 'inline' : 'none';
         }
-        if (blackClock) {
-            blackClock.classList.toggle('active-clock', this.activePlayer === 'black' && this.isActive);
+        if (blackIndicator) {
+            blackIndicator.style.display = (this.activePlayer === 'black' && this.isActive) ? 'inline' : 'none';
+        }
+        
+        // Highlight active row
+        const whiteRow = document.querySelector('.white-time-row');
+        const blackRow = document.querySelector('.black-time-row');
+        
+        if (whiteRow) {
+            whiteRow.style.boxShadow = (this.activePlayer === 'white' && this.isActive) 
+                ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
+            whiteRow.style.transition = 'box-shadow 0.3s ease';
+        }
+        if (blackRow) {
+            blackRow.style.boxShadow = (this.activePlayer === 'black' && this.isActive) 
+                ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
+            blackRow.style.transition = 'box-shadow 0.3s ease';
         }
     }
     
@@ -123,17 +182,32 @@ class TimeControl {
         this.whiteTime = this.initialTime;
         this.blackTime = this.initialTime;
         this.updateDisplay();
+        console.log(`⏰ Time control set to ${minutes}+${increment}`);
     }
     
     reset() {
         this.stop();
         this.whiteTime = this.initialTime;
         this.blackTime = this.initialTime;
+        this.activePlayer = 'white';
         this.updateDisplay();
     }
     
     getTime(player) {
         return player === 'white' ? this.whiteTime : this.blackTime;
+    }
+    
+    syncWithPlayer(currentGamePlayer) {
+        // Only sync if timer is active and game not over
+        if (!this.isActive || gameOver) return;
+        
+        // If active player doesn't match game player, fix it
+        if (this.activePlayer !== currentGamePlayer) {
+            console.log(`⏰ Syncing timer: ${this.activePlayer} -> ${currentGamePlayer}`);
+            this.activePlayer = currentGamePlayer;
+            this.lastTick = Date.now();
+            this.updateDisplay();
+        }
     }
 }
 
@@ -324,11 +398,12 @@ let moveHistory = [];
 let gameOver = false;
 let gameMode = 'ai';
 let humanPlayer = 'white';
-let aiPlayer = 'black';  // AI plays black by default when human is white
+let aiPlayer = 'black';
 let moveCount = 1;
 let halfMoveCount = 0;
 let lastMove = null;
 let isThinking = false;
+let gameStarted = false;
 
 let castlingRights = {
     whiteKingside: true,
@@ -420,7 +495,6 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-// Endgame piece-square tables (kings become more active)
 const ENDGAME_PIECE_SQUARE_TABLES = {
     '♔': [
         [-50, -40, -30, -20, -20, -30, -40, -50],
@@ -730,13 +804,12 @@ window.clearMemory = function() {
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.2                ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.3                ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
     console.log("  setFEN('fen')      - Set position from FEN");
     console.log("  getFEN()           - Get current FEN");
-    console.log("  setup('name')      - Setup test position");
     console.log("\n🎮 MOVES:");
     console.log("  move('e2e4')       - Make a move");
     console.log("  legalMoves()       - Show all legal moves");
@@ -851,80 +924,20 @@ window.addEventListener('load', function() {
     }
     
     createBoard();
-    createTimeDisplay();
     updateStatus();
     updateAIStats();
     changeGameMode();
     displayVersion();
     
+    // Start the timer when game loads
+    timeControl.reset();
+    timeControl.start('white');
+    gameStarted = true;
+    
     console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
+    console.log(`⏰ Timer started! White to move.`);
     console.log(`💡 Type 'help()' in console to see available commands!`);
 });
-
-function createTimeDisplay() {
-    const boardContainer = document.querySelector('.board-container');
-    if (!boardContainer) return;
-    
-    // Remove existing time display if any
-    const existingDisplay = document.querySelector('.time-control-display');
-    if (existingDisplay) existingDisplay.remove();
-    
-    const timeDisplay = document.createElement('div');
-    timeDisplay.className = 'time-control-display';
-    timeDisplay.innerHTML = `
-        <div class="time-row white-time-row">
-            <span class="player-label">White</span>
-            <span id="white-time" class="time-display white-clock">10:00</span>
-        </div>
-        <div class="time-row black-time-row">
-            <span class="player-label">Black</span>
-            <span id="black-time" class="time-display black-clock">10:00</span>
-        </div>
-    `;
-    
-    // Add styles
-    const style = document.createElement('style');
-    style.textContent = `
-        .time-control-display {
-            margin-top: 15px;
-            padding: 10px;
-            background: #2a2a2a;
-            border-radius: 8px;
-        }
-        .time-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 5px 10px;
-            margin: 5px 0;
-            border-radius: 5px;
-        }
-        .white-time-row {
-            background: #3a3a3a;
-        }
-        .black-time-row {
-            background: #1a1a1a;
-            color: #ddd;
-        }
-        .player-label {
-            font-weight: bold;
-        }
-        .time-display {
-            font-family: 'Courier New', monospace;
-            font-size: 1.2em;
-        }
-        .active-clock {
-            background: #4CAF50;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 4px;
-            transition: background 0.3s;
-        }
-    `;
-    document.head.appendChild(style);
-    
-    boardContainer.appendChild(timeDisplay);
-    timeControl.updateDisplay();
-}
 
 function createBoard() {
     const boardElement = document.getElementById('chessboard');
@@ -1335,7 +1348,7 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
         moveTree.pruneInactiveLines(moveTree.activeLineMoves);
     }
     
-    // Handle time control
+    // Handle time control - switch timer to other player
     timeControl.switchPlayer();
 }
 
@@ -1367,6 +1380,8 @@ function updateHalfMoveClock(piece, capturedPiece) {
 
 function switchPlayer() {
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    // Sync timer with current player
+    timeControl.syncWithPlayer(currentPlayer);
 }
 
 function updateStatus() {
@@ -1690,7 +1705,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
             if (piece) {
                 let tableValue = 0;
                 
-                // Use endgame tables for kings in endgame
                 if (isEndgame && (piece === '♔' || piece === '♚') && ENDGAME_PIECE_SQUARE_TABLES[piece]) {
                     tableValue = ENDGAME_PIECE_SQUARE_TABLES[piece][row][col];
                 } else if (PIECE_SQUARE_TABLES[piece]) {
@@ -1712,14 +1726,13 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Mobility evaluation (simplified for speed)
+    // Mobility evaluation
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 8;
 
     // King safety in middlegame
     if (!isEndgame) {
-        // Penalize if king is exposed
         const whiteKingPos = findKing(boardState, 'white');
         const blackKingPos = findKing(boardState, 'black');
         
@@ -1733,8 +1746,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Hanging piece penalty - SIMPLE AND EFFECTIVE
-    const hangingPenalty = 50;
+    // Hanging piece penalty
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1828,7 +1840,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
-    // Move ordering - captures first
     moves.sort((a, b) => {
         const targetA = boardState[a.toRow][a.toCol];
         const targetB = boardState[b.toRow][b.toCol];
@@ -1886,7 +1897,6 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Try opening book first if available
     if (enhancedAI && moveHistory.length < 12) {
         const openingMoveAlgebraic = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1900,11 +1910,9 @@ function findBestMoveWithRiskAssessment() {
     
     const isEndgame = isEndgamePositionForPosition(board);
     
-    // Adjust depth based on time remaining
     const timeRemaining = timeControl.getTime(currentPlayer);
     let searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    // Reduce depth if low on time
     if (timeRemaining < 30) {
         searchDepth = Math.max(2, searchDepth - 1);
     } else if (timeRemaining < 60) {
@@ -1954,8 +1962,6 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
-    // For black, we want to minimize white's advantage
-    // The evaluation is from white's perspective, so for black we want lower/more negative scores
     if (currentPlayer === 'black') {
         evaluatedMoves.sort((a, b) => a.bestCase - b.bestCase);
     } else {
@@ -1964,10 +1970,8 @@ function findBestMoveWithRiskAssessment() {
     
     const riskAssessed = riskAssessor.assessLineRisk(evaluatedMoves);
     
-    // For black, we want the move that gives white the worst position
     let bestSafeMove;
     if (currentPlayer === 'black') {
-        // For black, we want the move with the LOWEST evaluation (worst for white)
         bestSafeMove = riskAssessed.reduce((best, current) => 
             current.bestCase < best.bestCase ? current : best
         , riskAssessed[0]);
@@ -1977,34 +1981,6 @@ function findBestMoveWithRiskAssessment() {
     
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
-    
-    // Extend calculations for the selected line
-    if (moveTree && SEARCH_CONFIG.useMemory && timeRemaining > 60) {
-        const extendedVariations = [];
-        const newBoardAfterMove = makeTestMoveForPosition(board, 
-            bestSafeMove.move.fromRow, bestSafeMove.move.fromCol,
-            bestSafeMove.move.toRow, bestSafeMove.move.toCol);
-        
-        if (newBoardAfterMove) {
-            const nextMoves = getAllPossibleMovesForPosition(newBoardAfterMove, currentPlayer === 'white' ? 'black' : 'white');
-            for (const nextMove of nextMoves.slice(0, 3)) {
-                const algebraicKey = toAlgebraicMove(nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
-                const deeperBoard = makeTestMoveForPosition(newBoardAfterMove, 
-                    nextMove.fromRow, nextMove.fromCol, nextMove.toRow, nextMove.toCol);
-                if (deeperBoard) {
-                    const deeperEval = minimaxWithRisk(deeperBoard, 2, -Infinity, Infinity, true,
-                        currentPlayer, moveCount + 2, false);
-                    
-                    extendedVariations.push({
-                        moveKey: algebraicKey,
-                        evaluation: deeperEval
-                    });
-                }
-            }
-        }
-        
-        moveTree.extendLine(moveTree.activeLineMoves, extendedVariations);
-    }
     
     return bestSafeMove.move;
 }
@@ -2065,7 +2041,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.3.2 (${timeControl.initialTime/60}+${timeControl.increment})`;
+        difficultyElement.textContent = `PMTS v2.3.3 (${timeControl.initialTime/60}+${timeControl.increment})`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2107,7 +2083,7 @@ function newGame() {
         moveTree.activeLineMoves = [];
     }
     
-    // Reset time control
+    // Reset and start time control
     timeControl.reset();
     timeControl.start('white');
 
@@ -2126,9 +2102,9 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Time Control and improved AI for both sides!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Time Control`);
+    console.log(`⏰ Timer started! White: ${timeControl.formatTime(timeControl.whiteTime)} | Black: ${timeControl.formatTime(timeControl.blackTime)}`);
     
-    // If AI plays white and human plays black, make AI move
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
     }
@@ -2160,6 +2136,12 @@ function undoMove() {
     if (statusElement) {
         statusElement.classList.remove('checkmate', 'check');
     }
+    
+    // Sync timer with current player after undo
+    timeControl.syncWithPlayer(currentPlayer);
+    if (!timeControl.isActive && !gameOver) {
+        timeControl.resume();
+    }
 }
 
 function switchSides() {
@@ -2186,8 +2168,9 @@ function changeGameMode() {
         gameModeDisplay.textContent = `vs AI (${timeControl.initialTime/60}+${timeControl.increment})`;
         if (aiInfo) aiInfo.style.display = 'block';
         
-        // Start time control
-        timeControl.start(currentPlayer);
+        if (!timeControl.isActive && !gameOver) {
+            timeControl.start(currentPlayer);
+        }
 
         if (currentPlayer === aiPlayer && !gameOver) {
             setTimeout(makeAIMove, 500);
@@ -2195,7 +2178,6 @@ function changeGameMode() {
     } else {
         gameModeDisplay.textContent = 'vs Player';
         if (aiInfo) aiInfo.style.display = 'none';
-        timeControl.stop();
     }
 }
 
@@ -2222,5 +2204,6 @@ if (typeof window !== 'undefined') {
     };
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Time Controls + Improved AI for Both Sides!`);
-console.log(`⏰ Commands: setTimeControl(minutes, increment) - e.g., setTimeControl(10, 5)`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Time Controls Fixed!`);
+console.log(`⏰ Timer starts immediately and decrements properly!`);
+console.log(`💡 Commands: setTimeControl(minutes, increment) - e.g., setTimeControl(10, 5)`);

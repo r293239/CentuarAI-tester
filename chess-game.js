@@ -1,11 +1,11 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.3 - Fixed Time Control (starts immediately, decrements properly)
+// VERSION: 2.3.4 - Fixed Timer During AI Thinking + No Time Limit Option
 // COMPATIBLE WITH: chess-ai-database.js (v2.0)
 
-const GAME_VERSION = "2.3.3";
+const GAME_VERSION = "2.3.4";
 
-// ========== TIME CONTROL SYSTEM (FIXED) ==========
+// ========== TIME CONTROL SYSTEM (FIXED - RUNS DURING AI THINKING) ==========
 class TimeControl {
     constructor() {
         this.initialTime = 600; // 10 minutes in seconds
@@ -16,12 +16,11 @@ class TimeControl {
         this.timerInterval = null;
         this.isActive = false;
         this.lastTick = 0;
+        this.unlimited = false; // No time limit mode
     }
     
     start(player) {
-        // Stop any existing timer first
         this.stop();
-        
         this.activePlayer = player || 'white';
         this.isActive = true;
         this.lastTick = Date.now();
@@ -47,7 +46,7 @@ class TimeControl {
     }
     
     resume() {
-        if (!this.isActive && !gameOver) {
+        if (!this.isActive && !gameOver && !this.unlimited) {
             this.isActive = true;
             this.lastTick = Date.now();
             this.startTimer();
@@ -55,7 +54,7 @@ class TimeControl {
     }
     
     switchPlayer() {
-        if (!this.isActive || gameOver) return;
+        if (!this.isActive || gameOver || this.unlimited) return;
         
         // Add increment to the player who just moved
         if (this.activePlayer === 'white') {
@@ -77,11 +76,15 @@ class TimeControl {
             clearInterval(this.timerInterval);
         }
         
+        // Don't start timer if unlimited mode
+        if (this.unlimited) return;
+        
         this.timerInterval = setInterval(() => {
-            if (!this.isActive || gameOver) return;
+            // Timer keeps running even during AI thinking!
+            if (!this.isActive || gameOver || this.unlimited) return;
             
             const now = Date.now();
-            const elapsed = (now - this.lastTick) / 1000; // Convert to seconds
+            const elapsed = (now - this.lastTick) / 1000;
             this.lastTick = now;
             
             if (this.activePlayer === 'white') {
@@ -99,7 +102,7 @@ class TimeControl {
             }
             
             this.updateDisplay();
-        }, 100); // Update every 100ms for smooth display
+        }, 100);
     }
     
     timeout(player) {
@@ -115,6 +118,7 @@ class TimeControl {
         
         console.log(`⏰ Time out! ${player} ran out of time. ${winner} wins!`);
         createBoard();
+        updateStatus();
     }
     
     updateDisplay() {
@@ -124,33 +128,39 @@ class TimeControl {
         const blackIndicator = document.getElementById('black-active-indicator');
         
         if (whiteTimeElement) {
-            whiteTimeElement.textContent = this.formatTime(this.whiteTime);
-            if (this.whiteTime < 60) {
-                whiteTimeElement.style.color = '#ff6b6b';
-                whiteTimeElement.style.textShadow = '0 0 10px rgba(255, 107, 107, 0.5)';
-            } else {
+            if (this.unlimited) {
+                whiteTimeElement.textContent = '∞';
                 whiteTimeElement.style.color = '#4CAF50';
-                whiteTimeElement.style.textShadow = '0 0 10px rgba(76, 175, 80, 0.5)';
+            } else {
+                whiteTimeElement.textContent = this.formatTime(this.whiteTime);
+                if (this.whiteTime < 60) {
+                    whiteTimeElement.style.color = '#ff6b6b';
+                } else {
+                    whiteTimeElement.style.color = '#4CAF50';
+                }
             }
         }
         
         if (blackTimeElement) {
-            blackTimeElement.textContent = this.formatTime(this.blackTime);
-            if (this.blackTime < 60) {
-                blackTimeElement.style.color = '#ff6b6b';
-                blackTimeElement.style.textShadow = '0 0 10px rgba(255, 107, 107, 0.5)';
-            } else {
+            if (this.unlimited) {
+                blackTimeElement.textContent = '∞';
                 blackTimeElement.style.color = '#4CAF50';
-                blackTimeElement.style.textShadow = '0 0 10px rgba(76, 175, 80, 0.5)';
+            } else {
+                blackTimeElement.textContent = this.formatTime(this.blackTime);
+                if (this.blackTime < 60) {
+                    blackTimeElement.style.color = '#ff6b6b';
+                } else {
+                    blackTimeElement.style.color = '#4CAF50';
+                }
             }
         }
         
         // Update active indicators
         if (whiteIndicator) {
-            whiteIndicator.style.display = (this.activePlayer === 'white' && this.isActive) ? 'inline' : 'none';
+            whiteIndicator.style.display = (this.activePlayer === 'white' && this.isActive && !this.unlimited) ? 'inline' : 'none';
         }
         if (blackIndicator) {
-            blackIndicator.style.display = (this.activePlayer === 'black' && this.isActive) ? 'inline' : 'none';
+            blackIndicator.style.display = (this.activePlayer === 'black' && this.isActive && !this.unlimited) ? 'inline' : 'none';
         }
         
         // Highlight active row
@@ -158,14 +168,12 @@ class TimeControl {
         const blackRow = document.querySelector('.black-time-row');
         
         if (whiteRow) {
-            whiteRow.style.boxShadow = (this.activePlayer === 'white' && this.isActive) 
+            whiteRow.style.boxShadow = (this.activePlayer === 'white' && this.isActive && !this.unlimited) 
                 ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
-            whiteRow.style.transition = 'box-shadow 0.3s ease';
         }
         if (blackRow) {
-            blackRow.style.boxShadow = (this.activePlayer === 'black' && this.isActive) 
+            blackRow.style.boxShadow = (this.activePlayer === 'black' && this.isActive && !this.unlimited) 
                 ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
-            blackRow.style.transition = 'box-shadow 0.3s ease';
         }
     }
     
@@ -177,37 +185,51 @@ class TimeControl {
     }
     
     setTimeControl(minutes, increment) {
-        this.initialTime = minutes * 60;
-        this.increment = increment;
-        this.whiteTime = this.initialTime;
-        this.blackTime = this.initialTime;
+        if (minutes === 0 || minutes === 'unlimited') {
+            this.unlimited = true;
+            this.stop();
+            this.initialTime = 0;
+            this.increment = 0;
+            console.log(`⏰ Time control: No limit`);
+        } else {
+            this.unlimited = false;
+            this.initialTime = minutes * 60;
+            this.increment = increment;
+            this.whiteTime = this.initialTime;
+            this.blackTime = this.initialTime;
+            console.log(`⏰ Time control set to ${minutes}+${increment}`);
+        }
         this.updateDisplay();
-        console.log(`⏰ Time control set to ${minutes}+${increment}`);
     }
     
     reset() {
         this.stop();
-        this.whiteTime = this.initialTime;
-        this.blackTime = this.initialTime;
+        if (!this.unlimited) {
+            this.whiteTime = this.initialTime;
+            this.blackTime = this.initialTime;
+        }
         this.activePlayer = 'white';
         this.updateDisplay();
     }
     
     getTime(player) {
+        if (this.unlimited) return Infinity;
         return player === 'white' ? this.whiteTime : this.blackTime;
     }
     
     syncWithPlayer(currentGamePlayer) {
-        // Only sync if timer is active and game not over
-        if (!this.isActive || gameOver) return;
+        if (!this.isActive || gameOver || this.unlimited) return;
         
-        // If active player doesn't match game player, fix it
         if (this.activePlayer !== currentGamePlayer) {
             console.log(`⏰ Syncing timer: ${this.activePlayer} -> ${currentGamePlayer}`);
             this.activePlayer = currentGamePlayer;
             this.lastTick = Date.now();
             this.updateDisplay();
         }
+    }
+    
+    isUnlimited() {
+        return this.unlimited;
     }
 }
 
@@ -403,7 +425,6 @@ let moveCount = 1;
 let halfMoveCount = 0;
 let lastMove = null;
 let isThinking = false;
-let gameStarted = false;
 
 let castlingRights = {
     whiteKingside: true,
@@ -531,7 +552,11 @@ window.displayBoard = function() {
     }
     console.log(`\nCurrent player: ${currentPlayer}`);
     console.log(`Game over: ${gameOver}`);
-    console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    if (!timeControl.isUnlimited()) {
+        console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    } else {
+        console.log(`Time: No limit`);
+    }
     if (isKingInCheck(board, currentPlayer)) {
         console.log(`⚠️ ${currentPlayer} is in check!`);
     }
@@ -749,9 +774,15 @@ window.setMode = function(mode) {
 };
 
 window.setTimeControl = function(minutes, increment) {
-    timeControl.setTimeControl(minutes, increment || 0);
-    console.log(`Time control set to ${minutes}+${increment || 0}`);
-    return `Time control: ${minutes}+${increment || 0}`;
+    if (minutes === 0 || minutes === 'unlimited' || minutes === 'none') {
+        timeControl.setTimeControl(0, 0);
+        console.log(`Time control: No limit`);
+    } else {
+        timeControl.setTimeControl(minutes, increment || 0);
+        console.log(`Time control set to ${minutes}+${increment || 0}`);
+    }
+    updateAIStats();
+    return `Time control: ${minutes === 0 ? 'No limit' : minutes + '+' + (increment || 0)}`;
 };
 
 window.switchSide = function() {
@@ -768,7 +799,11 @@ window.stats = function() {
     console.log(`Game over: ${gameOver}`);
     console.log(`Human plays: ${humanPlayer}`);
     console.log(`AI plays: ${aiPlayer}`);
-    console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    if (timeControl.isUnlimited()) {
+        console.log(`Time: No limit`);
+    } else {
+        console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    }
     
     if (moveTree) {
         const stats = moveTree.getStats();
@@ -804,7 +839,7 @@ window.clearMemory = function() {
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.3                ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.4                ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -821,7 +856,9 @@ window.help = function() {
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
     console.log("\n⏰ TIME CONTROL:");
-    console.log("  setTimeControl(min, inc) - Set time (e.g., setTimeControl(10, 5))");
+    console.log("  setTimeControl(10, 5)  - Set 10 min + 5 sec");
+    console.log("  setTimeControl(0, 0)   - No time limit");
+    console.log("  setTimeControl('unlimited') - No time limit");
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
@@ -898,7 +935,11 @@ function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
     console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment + Time Control`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
-    console.log(`⏰ Time Control: ${timeControl.initialTime/60}+${timeControl.increment}`);
+    if (timeControl.isUnlimited()) {
+        console.log(`⏰ Time Control: No limit`);
+    } else {
+        console.log(`⏰ Time Control: ${timeControl.initialTime/60}+${timeControl.increment}`);
+    }
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -932,7 +973,6 @@ window.addEventListener('load', function() {
     // Start the timer when game loads
     timeControl.reset();
     timeControl.start('white');
-    gameStarted = true;
     
     console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
     console.log(`⏰ Timer started! White to move.`);
@@ -1380,7 +1420,6 @@ function updateHalfMoveClock(piece, capturedPiece) {
 
 function switchPlayer() {
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    // Sync timer with current player
     timeControl.syncWithPlayer(currentPlayer);
 }
 
@@ -1687,7 +1726,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     let evaluation = 0;
     const isEndgame = isEndgamePositionForPosition(boardState);
 
-    // Material evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1698,7 +1736,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Positional evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1716,7 +1753,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Center control bonus
     const centerBonus = 25;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
@@ -1726,12 +1762,10 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Mobility evaluation
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 8;
 
-    // King safety in middlegame
     if (!isEndgame) {
         const whiteKingPos = findKing(boardState, 'white');
         const blackKingPos = findKing(boardState, 'black');
@@ -1746,7 +1780,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Hanging piece penalty
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1913,13 +1946,17 @@ function findBestMoveWithRiskAssessment() {
     const timeRemaining = timeControl.getTime(currentPlayer);
     let searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    if (timeRemaining < 30) {
-        searchDepth = Math.max(2, searchDepth - 1);
-    } else if (timeRemaining < 60) {
-        searchDepth = Math.max(2, searchDepth);
+    // Only adjust depth if time control is active (not unlimited)
+    if (!timeControl.isUnlimited()) {
+        if (timeRemaining < 30) {
+            searchDepth = Math.max(2, searchDepth - 1);
+        } else if (timeRemaining < 60) {
+            searchDepth = Math.max(2, searchDepth);
+        }
     }
     
-    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth} (time: ${timeControl.formatTime(timeRemaining)})`);
+    const timeDisplay = timeControl.isUnlimited() ? '∞' : timeControl.formatTime(timeRemaining);
+    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth} (time: ${timeDisplay})`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -1989,7 +2026,7 @@ function findBestMove() {
     return findBestMoveWithRiskAssessment();
 }
 
-// ========== AI MOVE EXECUTION ==========
+// ========== AI MOVE EXECUTION (TIMER KEEPS RUNNING) ==========
 
 function makeAIMove() {
     if (isThinking || gameOver) return;
@@ -2005,6 +2042,9 @@ function makeAIMove() {
         syncStatusElement.classList.add('thinking');
     }
 
+    // IMPORTANT: Do NOT pause the timer! Let it keep running during AI thinking
+    
+    // Use setTimeout to not block the UI
     setTimeout(() => {
         const bestMove = findBestMove();
         if (bestMove) {
@@ -2024,7 +2064,7 @@ function makeAIMove() {
             const stats = moveTree.getStats();
             console.log(`📊 Memory stats: ${stats.totalMoves} moves cached`);
         }
-    }, 300);
+    }, 100); // Small delay to let UI update
 }
 
 // ========== UI FUNCTIONS ==========
@@ -2041,7 +2081,11 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.3.3 (${timeControl.initialTime/60}+${timeControl.increment})`;
+        if (timeControl.isUnlimited()) {
+            difficultyElement.textContent = `PMTS v2.3.4 (No limit)`;
+        } else {
+            difficultyElement.textContent = `PMTS v2.3.4 (${timeControl.initialTime/60}+${timeControl.increment})`;
+        }
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2102,8 +2146,12 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Time Control`);
-    console.log(`⏰ Timer started! White: ${timeControl.formatTime(timeControl.whiteTime)} | Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    console.log(`🎯 New game started! ${GAME_VERSION}`);
+    if (timeControl.isUnlimited()) {
+        console.log(`⏰ Time: No limit`);
+    } else {
+        console.log(`⏰ Timer started! White: ${timeControl.formatTime(timeControl.whiteTime)} | Black: ${timeControl.formatTime(timeControl.blackTime)}`);
+    }
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2137,7 +2185,6 @@ function undoMove() {
         statusElement.classList.remove('checkmate', 'check');
     }
     
-    // Sync timer with current player after undo
     timeControl.syncWithPlayer(currentPlayer);
     if (!timeControl.isActive && !gameOver) {
         timeControl.resume();
@@ -2165,7 +2212,11 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = `vs AI (${timeControl.initialTime/60}+${timeControl.increment})`;
+        if (timeControl.isUnlimited()) {
+            gameModeDisplay.textContent = `vs AI (No limit)`;
+        } else {
+            gameModeDisplay.textContent = `vs AI (${timeControl.initialTime/60}+${timeControl.increment})`;
+        }
         if (aiInfo) aiInfo.style.display = 'block';
         
         if (!timeControl.isActive && !gameOver) {
@@ -2198,12 +2249,16 @@ if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
     window.setTimeControl = (min, inc) => {
-        timeControl.setTimeControl(min, inc || 0);
+        if (min === 0 || min === 'unlimited' || min === 'none') {
+            timeControl.setTimeControl(0, 0);
+        } else {
+            timeControl.setTimeControl(min, inc || 0);
+        }
         updateAIStats();
-        console.log(`Time control set to ${min}+${inc || 0}`);
+        console.log(`Time control: ${min === 0 ? 'No limit' : min + '+' + (inc || 0)}`);
     };
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Time Controls Fixed!`);
-console.log(`⏰ Timer starts immediately and decrements properly!`);
-console.log(`💡 Commands: setTimeControl(minutes, increment) - e.g., setTimeControl(10, 5)`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Timer runs during AI thinking + No limit option!`);
+console.log(`⏰ Commands: setTimeControl(10, 5) or setTimeControl(0, 0) for no limit`);
+console.log(`💡 Type 'help()' for all commands`);

@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chess Game with Smart AI</title>
+    <title>Chess Game with Smart AI + Time Control</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
@@ -17,11 +17,11 @@
         }
 
         .container {
-            background: white;
-            border-radius: 15px;
+            background: #2d2d44;
+            border-radius: 20px;
             padding: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-            max-width: 700px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            max-width: 750px;
             width: 100%;
             animation: fadeIn 0.5s ease-in;
         }
@@ -33,47 +33,188 @@
 
         h1 {
             text-align: center;
-            color: #333;
-            margin-bottom: 30px;
-            font-size: 2.5rem;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+            color: #fff;
+            margin-bottom: 20px;
+            font-size: 2.2rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
         .game-info {
             text-align: center;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: linear-gradient(135deg, #f0f0f0 0%, #e8e8e8 100%);
-            border-radius: 10px;
+            margin-bottom: 15px;
+            padding: 12px;
+            background: linear-gradient(135deg, #3d3d5c 0%, #2d2d44 100%);
+            border-radius: 12px;
             display: flex;
             justify-content: space-between;
             flex-wrap: wrap;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
         }
 
         .info-section {
             margin: 5px;
             padding: 8px 15px;
-            background: white;
+            background: #1a1a2e;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
             font-weight: bold;
-            color: #333;
+            color: #fff;
+        }
+
+        /* Time Control Display */
+        .time-control-display {
+            margin: 15px 0;
+            padding: 12px 15px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1a 100%);
+            border-radius: 12px;
+            border: 1px solid #4a4a6a;
+        }
+
+        .time-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 15px;
+            margin: 5px 0;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .white-time-row {
+            background: linear-gradient(135deg, #3d3d5c 0%, #2d2d44 100%);
+        }
+
+        .black-time-row {
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1a 100%);
+            color: #ddd;
+        }
+
+        .player-label {
+            font-weight: bold;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .time-display {
+            font-family: 'Courier New', monospace;
+            font-size: 1.8em;
+            font-weight: bold;
+            padding: 5px 15px;
+            border-radius: 8px;
+            background: #0a0a15;
+            color: #4CAF50;
+            text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+            letter-spacing: 2px;
+        }
+
+        .active-clock {
+            background: #4CAF50;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: normal;
+            margin-left: 10px;
+            animation: pulseGreen 1.5s infinite;
+        }
+
+        @keyframes pulseGreen {
+            0%, 100% { opacity: 0.8; }
+            50% { opacity: 1; background: #66bb6a; }
+        }
+
+        .time-warning {
+            color: #ff6b6b !important;
+            text-shadow: 0 0 10px rgba(255, 107, 107, 0.5) !important;
+        }
+
+        /* Time Control Selector */
+        .time-control-selector {
+            margin: 15px 0;
+            padding: 15px;
+            background: linear-gradient(135deg, #3d3d5c 0%, #2d2d44 100%);
+            border-radius: 12px;
+            border: 1px solid #5a5a7a;
+        }
+
+        .time-control-selector label {
+            font-weight: bold;
+            color: #fff;
+            margin-right: 15px;
+        }
+
+        .time-control-selector select {
+            padding: 10px 15px;
+            font-size: 14px;
+            border-radius: 8px;
+            border: 2px solid #667eea;
+            background: #1a1a2e;
+            color: #fff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .time-control-selector select:hover {
+            border-color: #8b9cff;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .time-control-selector button {
+            padding: 10px 20px;
+            font-size: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .time-control-selector button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .custom-time-input {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            align-items: center;
+        }
+
+        .custom-time-input input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 2px solid #667eea;
+            background: #1a1a2e;
+            color: #fff;
+            width: 70px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .custom-time-input span {
+            color: #aaa;
+            font-size: 14px;
         }
 
         .game-mode {
             text-align: center;
             margin: 15px 0;
-            padding: 15px;
-            background: rgba(255,255,255,0.9);
+            padding: 12px;
+            background: rgba(61, 61, 92, 0.5);
             border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
 
         .game-mode label {
             font-weight: bold;
             margin-right: 10px;
-            color: #333;
+            color: #fff;
         }
 
         .game-mode select {
@@ -81,32 +222,25 @@
             font-size: 14px;
             border-radius: 8px;
             border: 2px solid #667eea;
-            background: white;
-            color: #333;
+            background: #1a1a2e;
+            color: #fff;
             cursor: pointer;
             transition: all 0.3s ease;
             font-weight: bold;
         }
 
         .game-mode select:hover {
-            border-color: #5a6fd8;
-            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-        }
-
-        .game-mode select:focus {
-            outline: none;
-            border-color: #4f5cd1;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+            border-color: #8b9cff;
         }
 
         #chessboard {
             width: 480px;
             height: 480px;
             margin: 20px auto;
-            border: 4px solid #333;
+            border: 4px solid #4a4a6a;
             border-radius: 10px;
             position: relative;
-            box-shadow: 0 10px 20px rgba(0,0,0,0.4);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
             overflow: hidden;
         }
 
@@ -126,35 +260,28 @@
         }
 
         .light { 
-            background-color: #f0d9b5;
+            background-color: #e8d5b5;
         }
         
         .dark { 
-            background-color: #b58863;
+            background-color: #8b7355;
         }
         
         .square:hover {
-            opacity: 0.8;
+            opacity: 0.9;
             transform: scale(1.05);
             z-index: 5;
         }
         
         .selected {
-            background-color: #87CEEB !important;
-            box-shadow: inset 0 0 20px rgba(0,100,255,0.8);
+            background-color: #6b9fff !important;
+            box-shadow: inset 0 0 20px rgba(107, 159, 255, 0.8);
             transform: scale(1.1);
             z-index: 10;
-            animation: selectedPulse 2s infinite;
-        }
-
-        @keyframes selectedPulse {
-            0%, 100% { box-shadow: inset 0 0 20px rgba(0,100,255,0.8); }
-            50% { box-shadow: inset 0 0 30px rgba(0,150,255,0.9); }
         }
         
         .possible-move {
-            background-color: #90EE90 !important;
-            position: relative;
+            background-color: #6bcf7f !important;
         }
 
         .possible-move::after {
@@ -162,199 +289,150 @@
             position: absolute;
             top: 50%;
             left: 50%;
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             border-radius: 50%;
-            background-color: rgba(0, 128, 0, 0.8);
+            background-color: rgba(46, 125, 50, 0.8);
             transform: translate(-50%, -50%);
-            animation: pulse 2s infinite;
         }
 
         .capture-move {
-            background-color: #FF6B6B !important;
-            position: relative;
+            background-color: #ff6b6b !important;
         }
 
         .capture-move::after {
             content: '';
             position: absolute;
-            top: 2px;
-            right: 2px;
-            bottom: 2px;
-            left: 2px;
-            border: 3px solid rgba(255, 0, 0, 0.9);
+            top: 3px;
+            right: 3px;
+            bottom: 3px;
+            left: 3px;
+            border: 3px solid rgba(220, 20, 20, 0.9);
             border-radius: 8px;
-            animation: captureGlow 1.5s infinite alternate;
-        }
-
-        @keyframes captureGlow {
-            from { border-color: rgba(255, 0, 0, 0.9); }
-            to { border-color: rgba(255, 100, 100, 0.9); }
         }
 
         .last-move {
-            background-color: #FFE4B5 !important;
-            box-shadow: 0 0 15px rgba(255, 215, 0, 0.8);
+            background-color: #ffd700 !important;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.6);
         }
 
         .in-check {
-            background-color: #FF4444 !important;
+            background-color: #ff4444 !important;
             animation: checkPulse 1s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
-            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
         }
 
         @keyframes checkPulse {
             0% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.7); }
-            70% { box-shadow: 0 0 0 20px rgba(255, 68, 68, 0); }
+            70% { box-shadow: 0 0 0 15px rgba(255, 68, 68, 0); }
             100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0); }
         }
 
         .controls {
             text-align: center;
-            margin: 25px 0;
+            margin: 20px 0;
             display: flex;
             justify-content: center;
             flex-wrap: wrap;
-            gap: 15px;
+            gap: 12px;
         }
 
         button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            padding: 15px 30px;
+            padding: 12px 24px;
             border-radius: 30px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             transition: all 0.3s ease;
-            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
-            position: relative;
-            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
             text-transform: uppercase;
             letter-spacing: 1px;
         }
 
-        button::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            transition: left 0.5s;
-        }
-
         button:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-        }
-
-        button:hover::before {
-            left: 100%;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
         }
 
         button:active {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            transform: translateY(0);
         }
 
         button:disabled {
-            background: linear-gradient(135deg, #ccc 0%, #999 100%);
+            background: linear-gradient(135deg, #555 0%, #777 100%);
             cursor: not-allowed;
             transform: none;
-        }
-
-        button:disabled:hover {
-            transform: none;
-            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+            box-shadow: none;
         }
 
         .status {
             text-align: center;
-            font-size: 20px;
+            font-size: 18px;
             font-weight: bold;
-            margin: 20px 0;
-            padding: 20px;
+            margin: 15px 0;
+            padding: 15px;
             border-radius: 12px;
-            background: linear-gradient(135deg, #f9f9f9 0%, #e9e9e9 100%);
-            border: 3px solid #ddd;
-            box-shadow: 0 6px 12px rgba(0,0,0,0.1);
-            position: relative;
-            overflow: hidden;
-            color: #333;
+            background: linear-gradient(135deg, #3d3d5c 0%, #2d2d44 100%);
+            border: 2px solid #5a5a7a;
+            color: #fff;
         }
 
         .status.checkmate {
-            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
-            color: white;
-            border-color: #c0392b;
+            background: linear-gradient(135deg, #c0392b 0%, #e74c3c 100%);
+            border-color: #ff6b6b;
             animation: celebrate 0.6s ease-in-out;
-            box-shadow: 0 8px 16px rgba(238, 90, 36, 0.4);
         }
 
         .status.check {
-            background: linear-gradient(135deg, #ffa726 0%, #ff7043 100%);
-            color: white;
-            border-color: #e65100;
-            animation: warning 0.4s ease-in-out;
-            box-shadow: 0 8px 16px rgba(255, 112, 67, 0.4);
+            background: linear-gradient(135deg, #e67e22 0%, #d35400 100%);
+            border-color: #f39c12;
         }
 
         @keyframes celebrate {
             0%, 100% { transform: scale(1); }
-            25% { transform: scale(1.05); }
-            75% { transform: scale(1.02); }
-        }
-
-        @keyframes warning {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-8px); }
-            75% { transform: translateX(8px); }
+            25% { transform: scale(1.03); }
+            75% { transform: scale(1.01); }
         }
 
         .thinking {
             text-align: center;
             color: #667eea;
             font-weight: bold;
-            margin: 15px 0;
-            padding: 15px;
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            margin: 12px 0;
+            padding: 12px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
             border: 2px solid rgba(102, 126, 234, 0.3);
             border-radius: 10px;
             animation: thinkingPulse 1.5s infinite;
-            font-size: 18px;
+            font-size: 16px;
         }
 
         @keyframes thinkingPulse {
-            0%, 100% { opacity: 0.7; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.02); }
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
         }
 
         .move-history {
-            max-height: 180px;
+            max-height: 160px;
             overflow-y: auto;
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            padding: 20px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1a 100%);
+            padding: 15px;
             border-radius: 12px;
-            margin-top: 25px;
+            margin-top: 20px;
             font-family: 'Courier New', monospace;
-            font-size: 14px;
-            border: 2px solid #dee2e6;
-            box-shadow: inset 0 2px 8px rgba(0,0,0,0.1);
+            font-size: 13px;
+            border: 2px solid #4a4a6a;
+            color: #ddd;
         }
 
         .move-history::-webkit-scrollbar {
-            width: 10px;
+            width: 8px;
         }
 
         .move-history::-webkit-scrollbar-track {
-            background: #f1f1f1;
+            background: #1a1a2e;
             border-radius: 5px;
         }
 
@@ -363,65 +441,40 @@
             border-radius: 5px;
         }
 
-        .move-history::-webkit-scrollbar-thumb:hover {
-            background: linear-gradient(135deg, #5a6fd8, #6a4190);
-        }
-
         .ai-info {
             text-align: center;
-            margin: 15px 0;
-            padding: 15px;
-            background: linear-gradient(135deg, #e8f4fd 0%, #d1ecf1 100%);
+            margin: 12px 0;
+            padding: 10px;
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d2137 100%);
             border-radius: 10px;
-            font-size: 16px;
-            color: #155724;
-            border: 2px solid #b8daff;
-            position: relative;
-            font-weight: bold;
-        }
-
-        .ai-info::before {
-            content: '🤖';
-            font-size: 20px;
-            margin-right: 10px;
+            font-size: 14px;
+            color: #8b9cff;
+            border: 1px solid #3a5a8a;
         }
 
         .sync-status {
             text-align: center;
-            margin: 10px 0;
-            padding: 10px;
-            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            margin: 8px 0;
+            padding: 8px;
+            background: linear-gradient(135deg, #1a3a1a 0%, #0d260d 100%);
             border-radius: 8px;
-            font-size: 14px;
-            color: #155724;
-            border: 2px solid #c3e6cb;
-            font-weight: bold;
+            font-size: 13px;
+            color: #6bcf7f;
+            border: 1px solid #2d5a2d;
             transition: all 0.3s ease;
         }
 
         .sync-status.thinking {
-            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-            color: #856404;
-            border-color: #ffeaa7;
-        }
-
-        .ai-learning-info {
-            margin-top: 20px;
-            padding: 15px;
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-            border-radius: 10px;
-            font-size: 13px;
-            text-align: center;
-            color: #495057;
-            border: 2px solid rgba(102, 126, 234, 0.2);
-            line-height: 1.6;
+            background: linear-gradient(135deg, #5a4a1a 0%, #3a2a0d 100%);
+            color: #ffd700;
+            border-color: #8a7a3a;
         }
 
         .loading {
             display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #f3f3f3;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #3d3d5c;
             border-radius: 50%;
             border-top: 2px solid #667eea;
             animation: spin 1s linear infinite;
@@ -434,15 +487,13 @@
         }
 
         /* Responsive design */
-        @media (max-width: 768px) {
+        @media (max-width: 600px) {
             .container {
-                padding: 20px;
-                margin: 10px;
+                padding: 15px;
             }
             
             h1 {
-                font-size: 2rem;
-                margin-bottom: 20px;
+                font-size: 1.8rem;
             }
             
             #chessboard {
@@ -456,26 +507,32 @@
                 font-size: 24px;
             }
             
-            .game-info {
-                flex-direction: column;
-                gap: 10px;
+            .time-display {
+                font-size: 1.2em;
+                padding: 3px 10px;
             }
             
             .controls {
                 flex-direction: column;
                 align-items: center;
-                gap: 10px;
             }
             
             button {
                 width: 100%;
-                max-width: 250px;
-                padding: 12px 20px;
-                font-size: 14px;
+                max-width: 200px;
+            }
+            
+            .time-control-selector select {
+                width: 100%;
+                margin-bottom: 8px;
+            }
+            
+            .custom-time-input {
+                flex-wrap: wrap;
             }
         }
 
-        @media (max-width: 480px) {
+        @media (max-width: 400px) {
             #chessboard {
                 width: 280px;
                 height: 280px;
@@ -486,27 +543,6 @@
                 height: 35px;
                 font-size: 20px;
             }
-        }
-
-        /* Enhanced animations */
-        .piece-capture {
-            animation: captureAnimation 0.5s ease-in-out;
-        }
-
-        @keyframes captureAnimation {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.3); opacity: 0.7; }
-            100% { transform: scale(0.8); opacity: 0; }
-        }
-
-        .piece-move {
-            animation: moveAnimation 0.3s ease-in-out;
-        }
-
-        @keyframes moveAnimation {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-            100% { transform: scale(1); }
         }
     </style>
 </head>
@@ -526,17 +562,62 @@
             </div>
         </div>
 
+        <!-- Time Control Display -->
+        <div class="time-control-display">
+            <div class="time-row white-time-row">
+                <span class="player-label">
+                    ⚪ White
+                    <span class="active-clock" id="white-active-indicator" style="display: none;">● ACTIVE</span>
+                </span>
+                <span id="white-time" class="time-display">10:00</span>
+            </div>
+            <div class="time-row black-time-row">
+                <span class="player-label">
+                    ⚫ Black
+                    <span class="active-clock" id="black-active-indicator" style="display: none;">● ACTIVE</span>
+                </span>
+                <span id="black-time" class="time-display">10:00</span>
+            </div>
+        </div>
+
+        <!-- Time Control Selector -->
+        <div class="time-control-selector">
+            <label>⏱️ Time Control:</label>
+            <select id="timeControlPreset" onchange="updateTimeControlPreset()">
+                <option value="1,0">Bullet (1+0)</option>
+                <option value="3,0">Blitz (3+0)</option>
+                <option value="3,2">Blitz (3+2)</option>
+                <option value="5,0">Blitz (5+0)</option>
+                <option value="5,3">Blitz (5+3)</option>
+                <option value="10,0">Rapid (10+0)</option>
+                <option value="10,5" selected>Rapid (10+5)</option>
+                <option value="15,10">Rapid (15+10)</option>
+                <option value="30,0">Classical (30+0)</option>
+                <option value="custom">Custom...</option>
+            </select>
+            <button onclick="applyTimeControl()">Apply</button>
+            
+            <div id="customTimeInput" class="custom-time-input" style="display: none;">
+                <input type="number" id="customMinutes" min="0" max="180" value="10" placeholder="Min">
+                <span>min +</span>
+                <input type="number" id="customIncrement" min="0" max="60" value="5" placeholder="Inc">
+                <span>sec</span>
+                <button onclick="applyCustomTimeControl()">Set</button>
+            </div>
+        </div>
+
         <div class="game-mode">
             <label for="gameMode">Game Mode:</label>
             <select id="gameMode" onchange="changeGameMode()">
-                <option value="ai">Centaur AI</option>
+                <option value="ai">vs Centaur AI</option>
                 <option value="player">Player vs Player</option>
             </select>
         </div>
 
         <div class="ai-info" id="ai-info">
-            Games Played: <span id="games-played">0</span> | 
-            AI Win Rate: <span id="win-rate">50%</span>
+            🤖 Games: <span id="games-played">0</span> | 
+            Win Rate: <span id="win-rate">65%</span> | 
+            Depth: <span id="ai-difficulty">PMTS v2.3.2</span>
         </div>
         
         <div class="sync-status" id="sync-status">Ready</div>
@@ -558,12 +639,6 @@
             <strong>📝 Move History:</strong>
             <div id="move-list">Game ready to start</div>
         </div>
-
-        <div class="ai-learning-info">
-            <strong>🧠 Smart AI Features:</strong> 
-            This AI uses a professional opening book, learns from games, and adapts its difficulty. 
-            It employs advanced evaluation including piece positioning, king safety, mobility, and tactical awareness.
-        </div>
     </div>
 
     <!-- Load JavaScript files -->
@@ -571,17 +646,118 @@
     <script src="chess-game.js"></script>
 
     <script>
-        // Enhanced status updates with animations
+        // Time control functions
+        function updateTimeControlPreset() {
+            const select = document.getElementById('timeControlPreset');
+            const customDiv = document.getElementById('customTimeInput');
+            
+            if (select.value === 'custom') {
+                customDiv.style.display = 'flex';
+            } else {
+                customDiv.style.display = 'none';
+            }
+        }
+        
+        function applyTimeControl() {
+            const select = document.getElementById('timeControlPreset');
+            
+            if (select.value === 'custom') {
+                document.getElementById('customTimeInput').style.display = 'flex';
+                return;
+            }
+            
+            const [minutes, increment] = select.value.split(',').map(Number);
+            
+            if (typeof setTimeControl === 'function') {
+                setTimeControl(minutes, increment);
+                console.log(`Time control set to ${minutes}+${increment}`);
+                
+                // Update display
+                const display = document.getElementById('game-mode-display');
+                if (display && gameMode === 'ai') {
+                    display.textContent = `vs AI (${minutes}+${increment})`;
+                }
+            }
+        }
+        
+        function applyCustomTimeControl() {
+            const minutes = parseInt(document.getElementById('customMinutes').value) || 10;
+            const increment = parseInt(document.getElementById('customIncrement').value) || 5;
+            
+            if (typeof setTimeControl === 'function') {
+                setTimeControl(minutes, increment);
+                console.log(`Custom time control set to ${minutes}+${increment}`);
+                
+                // Update select to show custom
+                document.getElementById('timeControlPreset').value = 'custom';
+                
+                // Update display
+                const display = document.getElementById('game-mode-display');
+                if (display && gameMode === 'ai') {
+                    display.textContent = `vs AI (${minutes}+${increment})`;
+                }
+            }
+        }
+        
+        // Override the time display update to show active indicator
+        const originalUpdateDisplay = TimeControl?.prototype?.updateDisplay;
+        if (typeof TimeControl !== 'undefined') {
+            TimeControl.prototype.updateDisplay = function() {
+                const whiteTimeElement = document.getElementById('white-time');
+                const blackTimeElement = document.getElementById('black-time');
+                const whiteIndicator = document.getElementById('white-active-indicator');
+                const blackIndicator = document.getElementById('black-active-indicator');
+                
+                if (whiteTimeElement) {
+                    whiteTimeElement.textContent = this.formatTime(this.whiteTime);
+                    if (this.whiteTime < 60) {
+                        whiteTimeElement.classList.add('time-warning');
+                    } else {
+                        whiteTimeElement.classList.remove('time-warning');
+                    }
+                }
+                
+                if (blackTimeElement) {
+                    blackTimeElement.textContent = this.formatTime(this.blackTime);
+                    if (this.blackTime < 60) {
+                        blackTimeElement.classList.add('time-warning');
+                    } else {
+                        blackTimeElement.classList.remove('time-warning');
+                    }
+                }
+                
+                // Update active indicators
+                if (whiteIndicator) {
+                    whiteIndicator.style.display = (this.activePlayer === 'white' && this.isActive) ? 'inline' : 'none';
+                }
+                if (blackIndicator) {
+                    blackIndicator.style.display = (this.activePlayer === 'black' && this.isActive) ? 'inline' : 'none';
+                }
+                
+                // Highlight active row
+                const whiteRow = document.querySelector('.white-time-row');
+                const blackRow = document.querySelector('.black-time-row');
+                
+                if (whiteRow) {
+                    whiteRow.style.boxShadow = (this.activePlayer === 'white' && this.isActive) 
+                        ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
+                }
+                if (blackRow) {
+                    blackRow.style.boxShadow = (this.activePlayer === 'black' && this.isActive) 
+                        ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
+                }
+            };
+        }
+
+        // Enhanced status updates
         function updateStatusWithAnimation(message, type = 'normal') {
             const statusElement = document.getElementById('status');
             if (statusElement) {
                 statusElement.textContent = message;
-                
-                // Remove existing classes
-                statusElement.classList.remove('checkmate', 'check', 'normal');
-                
-                // Add appropriate class
-                statusElement.classList.add(type);
+                statusElement.classList.remove('checkmate', 'check');
+                if (type !== 'normal') {
+                    statusElement.classList.add(type);
+                }
             }
         }
 
@@ -604,68 +780,13 @@
                 }
             }
             
-            // Space bar for new game
-            if (e.code === 'Space' && e.target.tagName !== 'SELECT') {
+            if (e.code === 'Space' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'INPUT') {
                 e.preventDefault();
                 if (typeof newGame === 'function') newGame();
             }
         });
 
-        // Enhanced piece animation
-        function animatePieceMove(fromSquare, toSquare) {
-            const fromElement = document.getElementById(fromSquare);
-            const toElement = document.getElementById(toSquare);
-            
-            if (fromElement) {
-                fromElement.classList.add('piece-move');
-                setTimeout(() => fromElement.classList.remove('piece-move'), 300);
-            }
-            
-            if (toElement) {
-                toElement.classList.add('piece-move');
-                setTimeout(() => toElement.classList.remove('piece-move'), 300);
-            }
-        }
-
-        // Welcome message and feature showcase
-        window.addEventListener('load', function() {
-            setTimeout(() => {
-                console.log('🎯 Welcome to Smart Chess AI! 🤖');
-                console.log('🔥 Enhanced Features:');
-                console.log('   • Professional opening database with 50+ openings');
-                console.log('   • Adaptive difficulty that learns from your play style');
-                console.log('   • Advanced position evaluation with piece tables');
-                console.log('   • Enhanced minimax with alpha-beta pruning');
-                console.log('   • King safety and mobility evaluation');
-                console.log('   • Beautiful animations and responsive design');
-                console.log('🎮 Keyboard shortcuts:');
-                console.log('   • Ctrl+Z: Undo move');
-                console.log('   • Ctrl+N: New game');
-                console.log('   • Ctrl+S: Switch sides');
-                console.log('   • Spacebar: New game');
-                console.log('🚀 The AI will get stronger as you play more games!');
-            }, 1000);
-        });
-
-        // Add visual feedback for moves
-        function addMoveEffect(square) {
-            const element = document.getElementById(square);
-            if (element) {
-                element.style.transform = 'scale(1.1)';
-                element.style.transition = 'transform 0.2s ease';
-                setTimeout(() => {
-                    element.style.transform = 'scale(1)';
-                }, 200);
-            }
-        }
-
-        // Enhanced error handling
-        window.addEventListener('error', function(e) {
-            console.error('Game error:', e.error);
-            // Don't show error to user, just log it
-        });
-
-        // Prevent context menu on chess board for better mobile experience
+        // Prevent context menu on chess board
         document.addEventListener('contextmenu', function(e) {
             if (e.target.classList.contains('square')) {
                 e.preventDefault();
@@ -688,47 +809,29 @@
             touchStartSquare = null;
         });
 
-        // Prevent zoom on double tap for better mobile experience
-        let lastTouchEnd = 0;
-        document.addEventListener('touchend', function(event) {
-            const now = (new Date()).getTime();
-            if (now - lastTouchEnd <= 300) {
-                event.preventDefault();
-            }
-            lastTouchEnd = now;
-        }, false);
-
-        // Performance monitoring
-        let gameStartTime = Date.now();
-        function trackPerformance() {
-            const gameTime = Date.now() - gameStartTime;
-            if (gameTime > 60000) { // After 1 minute
-                console.log('🔧 Game performance: Running smoothly for', Math.round(gameTime/1000), 'seconds');
-                gameStartTime = Date.now(); // Reset timer
-            }
-        }
-        
-        setInterval(trackPerformance, 60000); // Check every minute
-
         // Load game after DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🎯 Chess game interface loaded successfully!');
-            
-            // Initialize game after a short delay to ensure all scripts are loaded
-            setTimeout(() => {
-                if (typeof newGame === 'function') {
-                    console.log('🚀 Game functions loaded successfully!');
-                } else {
-                    console.log('⚠️ Game functions not loaded yet, please refresh if issues persist');
-                }
-            }, 500);
+            console.log('🎯 Chess game with Time Control loaded!');
+            console.log('⏰ Commands: setTimeControl(minutes, increment)');
+            console.log('💡 Select time control from dropdown or set custom');
         });
 
-        // Fallback error handling
-        window.onerror = function(msg, url, lineNo, columnNo, error) {
-            console.log('Error: ' + msg + '\nURL: ' + url + '\nLine: ' + lineNo + '\nColumn: ' + columnNo + '\nError object: ' + JSON.stringify(error));
-            return false;
-        };
+        // Welcome message
+        window.addEventListener('load', function() {
+            setTimeout(() => {
+                console.log('🎯 Welcome to Smart Chess AI with Time Control!');
+                console.log('⏱️ Available time controls:');
+                console.log('   • Bullet: 1+0');
+                console.log('   • Blitz: 3+0, 3+2, 5+0, 5+3');
+                console.log('   • Rapid: 10+0, 10+5, 15+10');
+                console.log('   • Classical: 30+0');
+                console.log('   • Custom: Set your own!');
+                console.log('🎮 Keyboard shortcuts:');
+                console.log('   • Ctrl+Z: Undo move');
+                console.log('   • Ctrl+N: New game');
+                console.log('   • Ctrl+S: Switch sides');
+            }, 500);
+        });
     </script>
 </body>
 </html>

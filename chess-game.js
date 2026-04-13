@@ -1,8 +1,8 @@
-// chess-game.js - Enhanced chess game with Advanced AI Strategies v2.5
-// VERSION: 2.5.0 - Added Threat Detection, King Safety, Pawn Structure, Mobility with Attack Tables, Tapered Evaluation, and SEE
+ // chess-game.js - Enhanced chess game with Advanced AI Strategies v2.5.1
+// VERSION: 2.5.1 - Fixed hanging pieces detection, enhanced tactical awareness, improved threat evaluation
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-endgame.js (v1.1)
 
-const GAME_VERSION = "2.5.0";
+const GAME_VERSION = "2.5.1";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -222,7 +222,7 @@ const PIECE_VALUES = {
     '': 0
 };
 
-// King safety piece-square tables (encourages king safety)
+// King safety piece-square tables
 const KING_SAFETY_TABLE = {
     '♔': [
         [-30, -40, -40, -50, -50, -40, -40, -30],
@@ -318,7 +318,172 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== NEW: ATTACK TABLE & MOBILITY SYSTEM ==========
+// ========== NEW: HANGING PIECE DETECTION ==========
+class HangingPieceDetector {
+    constructor() {
+        this.hangingPenaltyMultiplier = 1.5; // Heavy penalty for hanging pieces
+    }
+
+    findHangingPieces(boardState, player) {
+        const hanging = [];
+        const opponent = player === 'white' ? 'black' : 'white';
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    // Skip king for hanging detection
+                    if (piece === '♔' || piece === '♚') continue;
+                    
+                    const pieceValue = PIECE_VALUES[piece] || 0;
+                    const defenders = this.countDefenders(boardState, row, col, player);
+                    const attackers = this.countAttackers(boardState, row, col, opponent);
+                    
+                    // Piece is hanging if more attackers than defenders
+                    if (attackers > defenders) {
+                        hanging.push({
+                            piece,
+                            row,
+                            col,
+                            value: pieceValue,
+                            defenders,
+                            attackers,
+                            netExposure: attackers - defenders
+                        });
+                    }
+                    
+                    // Undefended piece (0 defenders, any attackers)
+                    if (defenders === 0 && attackers > 0) {
+                        hanging.push({
+                            piece,
+                            row,
+                            col,
+                            value: pieceValue,
+                            defenders: 0,
+                            attackers,
+                            netExposure: attackers,
+                            isUndefended: true
+                        });
+                    }
+                }
+            }
+        }
+        
+        return hanging;
+    }
+
+    countDefenders(boardState, targetRow, targetCol, player) {
+        let defenders = 0;
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    if (this.canPieceAttackSquare(boardState, piece, row, col, targetRow, targetCol)) {
+                        defenders++;
+                    }
+                }
+            }
+        }
+        
+        return defenders;
+    }
+
+    countAttackers(boardState, targetRow, targetCol, player) {
+        let attackers = 0;
+        
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece && isPlayerPieceForPosition(piece, player)) {
+                    if (this.canPieceAttackSquare(boardState, piece, row, col, targetRow, targetCol)) {
+                        // Lower value pieces count as attackers but we weight them
+                        attackers++;
+                    }
+                }
+            }
+        }
+        
+        return attackers;
+    }
+
+    canPieceAttackSquare(boardState, piece, fromRow, fromCol, toRow, toCol) {
+        const pieceCode = pieceMap[piece];
+        if (!pieceCode) return false;
+        
+        const dx = toCol - fromCol;
+        const dy = toRow - fromRow;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        
+        switch (pieceCode.toLowerCase()) {
+            case 'p':
+                const direction = pieceCode === 'P' ? -1 : 1;
+                return absDx === 1 && dy === direction;
+            case 'n':
+                return (absDx === 2 && absDy === 1) || (absDx === 1 && absDy === 2);
+            case 'k':
+                return absDx <= 1 && absDy <= 1;
+            case 'b':
+                return absDx === absDy && this.isPathClearForDetection(boardState, fromRow, fromCol, toRow, toCol);
+            case 'r':
+                return (dx === 0 || dy === 0) && this.isPathClearForDetection(boardState, fromRow, fromCol, toRow, toCol);
+            case 'q':
+                return (dx === 0 || dy === 0 || absDx === absDy) && this.isPathClearForDetection(boardState, fromRow, fromCol, toRow, toCol);
+            default:
+                return false;
+        }
+    }
+
+    isPathClearForDetection(boardState, fromRow, fromCol, toRow, toCol) {
+        const dx = Math.sign(toCol - fromCol);
+        const dy = Math.sign(toRow - fromRow);
+        let currentRow = fromRow + dy;
+        let currentCol = fromCol + dx;
+        
+        while (currentRow !== toRow || currentCol !== toCol) {
+            if (boardState[currentRow] && boardState[currentRow][currentCol]) return false;
+            currentRow += dy;
+            currentCol += dx;
+        }
+        return true;
+    }
+
+    calculateHangingPenalty(boardState, player) {
+        const hangingPieces = this.findHangingPieces(boardState, player);
+        let penalty = 0;
+        
+        for (const hp of hangingPieces) {
+            // Higher penalty for undefended pieces
+            if (hp.isUndefended) {
+                penalty += hp.value * this.hangingPenaltyMultiplier;
+            } else {
+                penalty += hp.value * (hp.netExposure * 0.5);
+            }
+            
+            // Extra penalty for high-value hanging pieces
+            if (hp.value >= 500) { // Rook or Queen
+                penalty += 50;
+            }
+        }
+        
+        return penalty;
+    }
+
+    // Check if a move leaves pieces hanging
+    evaluateMoveTacticalSafety(boardState, fromRow, fromCol, toRow, toCol, player) {
+        const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+        if (!newBoard) return -1000;
+        
+        const hangingBefore = this.calculateHangingPenalty(boardState, player);
+        const hangingAfter = this.calculateHangingPenalty(newBoard, player);
+        
+        // Negative means position got worse (more hanging pieces)
+        return hangingBefore - hangingAfter;
+    }
+}
+
+// ========== ATTACK TABLE & MOBILITY SYSTEM ==========
 class AttackTable {
     constructor() {
         this.attackMap = new Map();
@@ -448,7 +613,7 @@ class AttackTable {
     }
 }
 
-// ========== NEW: THREAT DETECTION SYSTEM ==========
+// ========== THREAT DETECTION SYSTEM ==========
 class ThreatDetector {
     constructor() {
         this.threatCache = new Map();
@@ -524,13 +689,14 @@ class ThreatDetector {
     calculateThreatScore(threats) {
         let score = 0;
         for (const threat of threats) {
-            score += threat.pieceValue * 0.3; // 30% of piece value as threat penalty
+            // Higher penalty for threats to valuable pieces
+            score += threat.pieceValue * 0.4;
         }
         return score;
     }
 }
 
-// ========== NEW: KING SAFETY MODULE ==========
+// ========== KING SAFETY MODULE ==========
 class KingSafetyModule {
     constructor() {
         this.pawnShieldBonus = 30;
@@ -543,16 +709,9 @@ class KingSafetyModule {
         
         let safetyScore = 0;
         
-        // Pawn shield evaluation
         safetyScore += this.evaluatePawnShield(boardState, kingPos, player);
-        
-        // Piece proximity to king (enemy pieces near king are bad)
         safetyScore -= this.evaluateEnemyProximity(boardState, kingPos, player);
-        
-        // King exposure (open files/ranks near king)
         safetyScore -= this.evaluateKingExposure(boardState, kingPos, player);
-        
-        // King tropism (how centralized enemy pieces are pointing at king)
         safetyScore -= this.evaluateKingTropism(boardState, kingPos, player);
         
         return safetyScore;
@@ -584,7 +743,7 @@ class KingSafetyModule {
                         if (piece === expectedPawn) {
                             shieldScore += this.pawnShieldBonus;
                         } else if (!piece) {
-                            shieldScore -= 10; // Missing pawn shield
+                            shieldScore -= 10;
                         }
                     }
                 }
@@ -604,8 +763,8 @@ class KingSafetyModule {
                 if (piece && isPlayerPieceForPosition(piece, opponent)) {
                     const distance = Math.abs(row - kingPos.row) + Math.abs(col - kingPos.col);
                     const pieceValue = PIECE_VALUES[piece] || 0;
-                    if (distance <= 2) {
-                        proximityScore += pieceValue / distance;
+                    if (distance <= 3) {
+                        proximityScore += pieceValue / (distance + 1);
                     }
                 }
             }
@@ -627,7 +786,7 @@ class KingSafetyModule {
                 const piece = boardState[newRow][newCol];
                 if (piece) {
                     if (!isPlayerPieceForPosition(piece, player)) {
-                        exposureScore += 15; // Enemy piece on open line to king
+                        exposureScore += 20;
                     }
                     break;
                 }
@@ -636,7 +795,7 @@ class KingSafetyModule {
                 newCol += dy;
             }
             
-            exposureScore += openSquares * 2;
+            exposureScore += openSquares * 3;
         }
         
         return exposureScore;
@@ -661,7 +820,7 @@ class KingSafetyModule {
     }
 }
 
-// ========== NEW: PAWN STRUCTURE EVALUATION ==========
+// ========== PAWN STRUCTURE EVALUATION ==========
 class PawnStructureEvaluator {
     constructor() {
         this.cache = new Map();
@@ -671,19 +830,10 @@ class PawnStructureEvaluator {
         const pawns = this.getPawns(boardState, player);
         let structureScore = 0;
         
-        // Doubled pawns penalty
         structureScore -= this.evaluateDoubledPawns(pawns) * PAWN_STRUCTURE.doubledPenalty;
-        
-        // Isolated pawns penalty
         structureScore -= this.evaluateIsolatedPawns(pawns, boardState, player) * PAWN_STRUCTURE.isolatedPenalty;
-        
-        // Backward pawns penalty
         structureScore -= this.evaluateBackwardPawns(pawns, boardState, player) * PAWN_STRUCTURE.backwardPenalty;
-        
-        // Passed pawns bonus
         structureScore += this.evaluatePassedPawns(pawns, boardState, player) * PAWN_STRUCTURE.passedBonus;
-        
-        // Connected pawns bonus
         structureScore += this.evaluateConnectedPawns(pawns) * PAWN_STRUCTURE.connectedBonus;
         
         return structureScore;
@@ -792,7 +942,7 @@ class PawnStructureEvaluator {
     }
 }
 
-// ========== NEW: SEE (Swap Evaluation) ==========
+// ========== SEE (Swap Evaluation) ==========
 class SwapEvaluator {
     evaluateCapture(boardState, fromRow, fromCol, toRow, toCol, player) {
         const attacker = boardState[fromRow][fromCol];
@@ -803,16 +953,13 @@ class SwapEvaluator {
         const attackerValue = PIECE_VALUES[attacker] || 0;
         const victimValue = PIECE_VALUES[victim] || 0;
         
-        // If capturing a less valuable piece, it's probably good
         if (victimValue > attackerValue) return victimValue;
         
-        // Simulate the exchange
         const simulatedBoard = this.simulateCapture(boardState, fromRow, fromCol, toRow, toCol);
         const nextAttacker = this.findSmallestAttacker(simulatedBoard, toRow, toCol, player === 'white' ? 'black' : 'white');
         
         if (!nextAttacker) return victimValue;
         
-        // Recursively evaluate the exchange
         const nextCaptureValue = this.evaluateCapture(
             simulatedBoard, 
             nextAttacker.fromRow, 
@@ -898,12 +1045,12 @@ class SwapEvaluator {
     }
 }
 
-// ========== NEW: TAPERED EVALUATION ==========
+// ========== TAPERED EVALUATION ==========
 class TaperedEvaluator {
     constructor() {
         this.middlegameWeight = 1.0;
         this.endgameWeight = 0.0;
-        this.totalPhase = 24; // Max phase (opening/middlegame)
+        this.totalPhase = 24;
     }
 
     calculatePhase(boardState) {
@@ -1080,15 +1227,14 @@ window.board = window.displayBoard;
 window.setup = function(positionName) {
     const positions = {
         "start": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "pawn_glitch_test": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "hanging_test": "r1bqkbnr/ppp2ppp/2n5/3pp3/3PP3/5N2/PPP2PPP/RNBQKB1R w KQkq - 0 1",
         "endgame_king_pawn": "8/8/8/3k4/3P4/8/8/7K w - - 0 1",
         "endgame_queen_checkmate": "8/8/8/8/8/3k4/3Q4/7K w - - 0 1",
         "checkmate_test": "rnb1kbnr/pppp1ppp/8/4p3/5PPq/8/PPPPP2P/RNBQKBNR w KQkq - 0 1",
         "stalemate_test": "7k/8/8/8/8/8/5Q2/7K w - - 0 1",
         "en_passant_test": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
         "castling_test": "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1",
-        "rook_endgame": "8/8/8/3k4/3R4/8/8/7K w - - 0 1",
-        "bishop_knight_endgame": "8/8/8/3k4/3B4/3N4/8/7K w - - 0 1"
+        "rook_endgame": "8/8/8/3k4/3R4/8/8/7K w - - 0 1"
     };
     
     if (positions[positionName]) {
@@ -1136,6 +1282,12 @@ window.eval = function() {
     console.log(`   White pieces: ♕${whiteMaterial.queen} ♖${whiteMaterial.rooks} ♗${whiteMaterial.bishops} ♘${whiteMaterial.knights} ♙${whiteMaterial.pawns}`);
     console.log(`   Black pieces: ♛${blackMaterial.queen} ♜${blackMaterial.rooks} ♝${blackMaterial.bishops} ♞${blackMaterial.knights} ♟${blackMaterial.pawns}`);
     
+    // Show hanging pieces
+    const hangingDetector = new HangingPieceDetector();
+    const whiteHanging = hangingDetector.findHangingPieces(board, 'white');
+    const blackHanging = hangingDetector.findHangingPieces(board, 'black');
+    console.log(`⚠️ Hanging pieces - White: ${whiteHanging.length}, Black: ${blackHanging.length}`);
+    
     return score;
 };
 
@@ -1152,7 +1304,7 @@ window.ai = function() {
         console.log("⚠️ It's your turn! Make a move or switch sides.");
         return;
     }
-    console.log("🤖 AI is thinking with v2.5 enhanced evaluation...");
+    console.log("🤖 AI is thinking with v2.5.1 enhanced evaluation...");
     makeAIMove();
     return "AI move initiated";
 };
@@ -1211,10 +1363,6 @@ window.stats = function() {
         console.log(`Version: ${endgameEngine.version}`);
         const phase = endgameEngine.detectEndgamePhase(board);
         console.log(`Game phase: ${phase}`);
-        if (endgameEngine.getCacheStats) {
-            const cacheStats = endgameEngine.getCacheStats();
-            console.log(`Cache hit rate: ${cacheStats.hitRate}`);
-        }
     }
     
     console.log(`\n=== POSITION INFO ===`);
@@ -1246,11 +1394,25 @@ window.clearMemory = function() {
 };
 
 window.analyzePosition = function() {
-    console.log("\n=== ADVANCED POSITION ANALYSIS ===");
+    console.log("\n=== ADVANCED POSITION ANALYSIS (v2.5.1) ===");
+    
+    const hangingDetector = new HangingPieceDetector();
+    const whiteHanging = hangingDetector.findHangingPieces(board, 'white');
+    const blackHanging = hangingDetector.findHangingPieces(board, 'black');
+    
+    console.log(`\n⚠️ HANGING PIECES:`);
+    console.log(`White hanging: ${whiteHanging.length}`);
+    whiteHanging.forEach(hp => {
+        console.log(`   ${hp.piece} at (${hp.row},${hp.col}) - Value: ${hp.value}, Defenders: ${hp.defenders}, Attackers: ${hp.attackers}${hp.isUndefended ? ' [UNDEFENDED]' : ''}`);
+    });
+    console.log(`Black hanging: ${blackHanging.length}`);
+    blackHanging.forEach(hp => {
+        console.log(`   ${hp.piece} at (${hp.row},${hp.col}) - Value: ${hp.value}, Defenders: ${hp.defenders}, Attackers: ${hp.attackers}${hp.isUndefended ? ' [UNDEFENDED]' : ''}`);
+    });
     
     const threatDetector = new ThreatDetector();
     const threats = threatDetector.detectThreats(board, currentPlayer);
-    console.log(`🎯 Threats detected: ${threats.length}`);
+    console.log(`\n🎯 THREATS DETECTED: ${threats.length}`);
     threats.forEach(t => {
         console.log(`   ${t.attacker} at (${t.attackerPos.row},${t.attackerPos.col}) threatens ${t.target} at (${t.targetPos.row},${t.targetPos.col}) (value: ${t.pieceValue})`);
     });
@@ -1258,41 +1420,41 @@ window.analyzePosition = function() {
     const kingSafety = new KingSafetyModule();
     const whiteKingSafety = kingSafety.evaluateKingSafety(board, 'white');
     const blackKingSafety = kingSafety.evaluateKingSafety(board, 'black');
-    console.log(`👑 King safety - White: ${whiteKingSafety}, Black: ${blackKingSafety}`);
+    console.log(`\n👑 KING SAFETY - White: ${whiteKingSafety}, Black: ${blackKingSafety}`);
     
     const pawnStructure = new PawnStructureEvaluator();
     const whitePawnScore = pawnStructure.evaluatePawnStructure(board, 'white');
     const blackPawnScore = pawnStructure.evaluatePawnStructure(board, 'black');
-    console.log(`♙ Pawn structure - White: ${whitePawnScore}, Black: ${blackPawnScore}`);
+    console.log(`♙ PAWN STRUCTURE - White: ${whitePawnScore}, Black: ${blackPawnScore}`);
     
     const attackTable = new AttackTable();
     const whiteMobility = attackTable.getMobilityScore(board, 'white');
     const blackMobility = attackTable.getMobilityScore(board, 'black');
-    console.log(`🏃 Mobility - White: ${whiteMobility}, Black: ${blackMobility}`);
+    console.log(`🏃 MOBILITY - White: ${whiteMobility}, Black: ${blackMobility}`);
     
     const taperedEval = new TaperedEvaluator();
     const weights = taperedEval.calculatePhase(board);
-    console.log(`⚖️ Game phase - Middlegame: ${(weights.middlegame * 100).toFixed(1)}%, Endgame: ${(weights.endgame * 100).toFixed(1)}%`);
+    console.log(`⚖️ GAME PHASE - Middlegame: ${(weights.middlegame * 100).toFixed(1)}%, Endgame: ${(weights.endgame * 100).toFixed(1)}%`);
     
     return "Analysis complete";
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.5                  ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.5.1                ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board in console");
     console.log("  setFEN('fen')      - Set position from FEN string");
     console.log("  getFEN()           - Get current position as FEN");
-    console.log("  setup('name')      - Setup test position");
+    console.log("  setup('name')      - Setup test position (try 'hanging_test')");
     console.log("\n🎮 MOVES:");
     console.log("  move('e2e4')       - Make a move using algebraic notation");
     console.log("  legalMoves()       - Show all legal moves for current player");
     console.log("  undo()             - Undo last move");
     console.log("\n🤖 AI & EVALUATION:");
     console.log("  eval()             - Evaluate current position");
-    console.log("  analyzePosition()  - Advanced position analysis (NEW!)");
+    console.log("  analyzePosition()  - Advanced position analysis with hanging pieces");
     console.log("  ai()               - Force AI to make a move");
     console.log("  setDepth(n)        - Set AI search depth (1-6)");
     console.log("  setMode('ai/player') - Switch game mode");
@@ -1304,13 +1466,10 @@ window.help = function() {
     console.log("  newGame()          - Start a new game");
     console.log("  clearMemory()      - Clear AI memory cache");
     console.log("  help()             - Show this help message");
-    console.log("\n📝 NEW FEATURES IN v2.5:");
-    console.log("  • Threat Detection - Identifies opponent threats");
-    console.log("  • King Safety - Evaluates king protection");
-    console.log("  • Pawn Structure - Detects doubled/isolated/passed pawns");
-    console.log("  • Mobility with Attack Tables - Piece activity evaluation");
-    console.log("  • Tapered Evaluation - Gradual phase transition");
-    console.log("  • SEE - Swap evaluation for captures");
+    console.log("\n📝 FIXES IN v2.5.1:");
+    console.log("  • Hanging Piece Detection - Identifies undefended/exposed pieces");
+    console.log("  • Tactical Safety Evaluation - Prevents leaving pieces hanging");
+    console.log("  • Enhanced Threat Penalties - Stronger penalties for hanging material");
     console.log("\n");
     return "Help displayed above";
 };
@@ -1379,11 +1538,18 @@ class RiskAssessment {
     calculateRiskScore(line) {
         const potentialLoss = Math.abs(line.worstCase - line.bestCase);
         const depthWeight = Math.min(line.depth / 10, 1);
-        return potentialLoss * depthWeight;
+        let score = potentialLoss * depthWeight;
+        
+        // Add penalty for moves that leave pieces hanging
+        if (line.tacticalSafety < 0) {
+            score += Math.abs(line.tacticalSafety) * 2;
+        }
+        
+        return score;
     }
     
     findBestSafeMove(riskAssessedLines) {
-        const safeLines = riskAssessedLines.filter(line => line.isSafe);
+        const safeLines = riskAssessedLines.filter(line => line.isSafe && line.tacticalSafety >= -50);
         if (safeLines.length === 0) {
             console.log("⚠️ All lines have risk! Choosing least risky option...");
             riskAssessedLines.sort((a, b) => a.riskScore - b.riskScore);
@@ -1403,20 +1569,15 @@ let kingSafetyModule = new KingSafetyModule();
 let pawnStructureEval = new PawnStructureEvaluator();
 let swapEvaluator = new SwapEvaluator();
 let taperedEvaluator = new TaperedEvaluator();
+let hangingDetector = new HangingPieceDetector();
 
 // ========== CORE GAME FUNCTIONS ==========
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Advanced AI with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Eval & SEE`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Fixed Hanging Pieces + Enhanced Tactical Awareness`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
-    console.log(`🎯 New Features: Threat Detection | King Safety | Pawn Structure | Mobility | Tapered Evaluation | SEE`);
-    console.log(`🔄 Dynamic Extension: Extends calculations for active line only`);
-    if (endgameEngine) {
-        console.log(`📚 Endgame Engine v${endgameEngine.version} loaded!`);
-    } else {
-        console.log(`📚 Endgame Engine: Not loaded (chess-endgame.js missing)`);
-    }
+    console.log(`🎯 New in v2.5.1: Hanging Piece Detection | Tactical Safety | Enhanced Threat Penalties`);
     console.log(`\n💡 Type 'help()' in console to see available commands!`);
     console.log(`💡 Type 'analyzePosition()' for advanced position analysis!`);
 
@@ -1442,13 +1603,11 @@ window.addEventListener('load', function() {
         console.log("⚠️ ChessAILearner not found - using PMTS only");
     }
     
-    // Try to load endgame engine from the correct file name
     if (typeof ChessEndgameEngine !== 'undefined') {
         endgameEngine = new ChessEndgameEngine();
         console.log(`♟️ Endgame Engine v${endgameEngine.version} loaded!`);
     } else {
-        console.log("⚠️ ChessEndgameEngine not found - make sure chess-endgame.js is loaded before this file");
-        console.log("   Using standard evaluation without endgame specialization");
+        console.log("⚠️ ChessEndgameEngine not found - using standard evaluation without endgame specialization");
     }
     
     createBoard();
@@ -1456,9 +1615,6 @@ window.addEventListener('load', function() {
     updateAIStats();
     changeGameMode();
     displayVersion();
-    
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded with Advanced AI! ♛`);
-    console.log(`💡 Console commands available: help(), board(), setFEN(), move(), eval(), analyzePosition(), ai(), stats(), etc.`);
 });
 
 function createBoard() {
@@ -1994,7 +2150,7 @@ function updateMoveHistory() {
     moveListElement.textContent = formattedMoves.join(' ');
 }
 
-// ========== ENHANCED POSITION EVALUATION FUNCTIONS (v2.5) ==========
+// ========== ENHANCED POSITION EVALUATION FUNCTIONS (v2.5.1) ==========
 
 function isPlayerPieceForPosition(piece, player) {
     if (!piece) return false;
@@ -2243,7 +2399,23 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // NEW: Threat Detection Score
+    // HANGING PIECE PENALTY - NEW in v2.5.1
+    const whiteHangingPenalty = hangingDetector.calculateHangingPenalty(boardState, 'white');
+    const blackHangingPenalty = hangingDetector.calculateHangingPenalty(boardState, 'black');
+    
+    if (player === 'white') {
+        middlegameScore -= whiteHangingPenalty;
+        middlegameScore += blackHangingPenalty * 0.5; // Opponent's hanging pieces are good
+        endgameScore -= whiteHangingPenalty;
+        endgameScore += blackHangingPenalty * 0.5;
+    } else {
+        middlegameScore -= blackHangingPenalty;
+        middlegameScore += whiteHangingPenalty * 0.5;
+        endgameScore -= blackHangingPenalty;
+        endgameScore += whiteHangingPenalty * 0.5;
+    }
+
+    // Threat Detection Score
     const threats = threatDetector.detectThreats(boardState, player);
     const threatScore = threatDetector.calculateThreatScore(threats);
     if (player === 'white') {
@@ -2254,26 +2426,26 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         endgameScore += threatScore;
     }
 
-    // NEW: King Safety Score
+    // King Safety Score
     const whiteKingSafety = kingSafetyModule.evaluateKingSafety(boardState, 'white');
     const blackKingSafety = kingSafetyModule.evaluateKingSafety(boardState, 'black');
     middlegameScore += (whiteKingSafety - blackKingSafety);
     endgameScore += (whiteKingSafety - blackKingSafety);
 
-    // NEW: Pawn Structure Score
+    // Pawn Structure Score
     const whitePawnScore = pawnStructureEval.evaluatePawnStructure(boardState, 'white');
     const blackPawnScore = pawnStructureEval.evaluatePawnStructure(boardState, 'black');
     middlegameScore += (whitePawnScore - blackPawnScore);
     endgameScore += (whitePawnScore - blackPawnScore);
 
-    // NEW: Mobility Score (more important in middlegame)
+    // Mobility Score
     const whiteMobility = attackTable.getMobilityScore(boardState, 'white');
     const blackMobility = attackTable.getMobilityScore(boardState, 'black');
     const mobilityWeight = 5;
     middlegameScore += (whiteMobility - blackMobility) * mobilityWeight;
     endgameScore += (whiteMobility - blackMobility) * (mobilityWeight * 0.7);
 
-    // Center control (more important in middlegame)
+    // Center control
     const centerBonus = 30;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
@@ -2340,12 +2512,11 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
-            // Skip bad captures based on SEE
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const seeValue = swapEvaluator.evaluateCapture(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
-                if (seeValue < 0 && depth > 1) {
-                    continue; // Prune bad captures
+                if (seeValue < -50 && depth > 1) {
+                    continue;
                 }
             }
             
@@ -2370,12 +2541,11 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
-            // Skip bad captures based on SEE
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const seeValue = swapEvaluator.evaluateCapture(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
-                if (seeValue < 0 && depth > 1) {
-                    continue; // Prune bad captures
+                if (seeValue < -50 && depth > 1) {
+                    continue;
                 }
             }
             
@@ -2423,7 +2593,7 @@ function findBestMoveWithRiskAssessment() {
     
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 AI searching at depth ${searchDepth} with ENHANCED v2.5 evaluation (Threats, King Safety, Pawn Structure, Mobility, Tapered Eval, SEE)`);
+    console.log(`🔍 AI searching at depth ${searchDepth} with ENHANCED v2.5.1 evaluation (Hanging Pieces + Tactical Safety)`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -2439,10 +2609,16 @@ function findBestMoveWithRiskAssessment() {
                 move,
                 bestCase: cachedResult.evaluation,
                 worstCase: cachedResult.evaluation - 100,
-                depth: cachedResult.depth
+                depth: cachedResult.depth,
+                                tacticalSafety: 0
             });
         } else {
             const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
+            
+            // Calculate tactical safety (hanging pieces after move)
+            const tacticalSafety = hangingDetector.evaluateMoveTacticalSafety(
+                board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer
+            );
             
             const bestResult = minimaxWithRisk(newBoard, searchDepth - 1, -Infinity, Infinity, false, 
                 currentPlayer === 'white' ? 'black' : 'white', moveCount + 1, false);
@@ -2453,15 +2629,20 @@ function findBestMoveWithRiskAssessment() {
             const worstCase = typeof worstResult === 'object' ? worstResult.best : worstResult;
             const bestCase = typeof bestResult === 'object' ? bestResult.best : bestResult;
             
+            // Apply tactical safety penalty to evaluation
+            const adjustedBestCase = bestCase + tacticalSafety;
+            const adjustedWorstCase = worstCase + tacticalSafety;
+            
             evaluatedMoves.push({
                 move,
-                bestCase: bestCase,
-                worstCase: worstCase,
-                depth: searchDepth
+                bestCase: adjustedBestCase,
+                worstCase: adjustedWorstCase,
+                depth: searchDepth,
+                tacticalSafety
             });
             
             if (moveTree && SEARCH_CONFIG.useMemory) {
-                moveTree.storeMoveEvaluation(move, bestCase, searchDepth, [{ worst: worstCase }]);
+                moveTree.storeMoveEvaluation(move, adjustedBestCase, searchDepth, [{ worst: adjustedWorstCase }]);
             }
         }
     }
@@ -2470,15 +2651,11 @@ function findBestMoveWithRiskAssessment() {
     const bestSafeMove = riskAssessor.findBestSafeMove(riskAssessed);
     
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
-    console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
+    console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore} | Tactical safety: ${bestSafeMove.tacticalSafety || 0}`);
     
     // Log detailed analysis for the chosen move
-    console.log(`📊 Move analysis:`, {
-        threatScore: threatDetector.calculateThreatScore(threatDetector.detectThreats(board, currentPlayer)),
-        kingSafety: kingSafetyModule.evaluateKingSafety(board, currentPlayer),
-        pawnStructure: pawnStructureEval.evaluatePawnStructure(board, currentPlayer),
-        mobility: attackTable.getMobilityScore(board, currentPlayer)
-    });
+    const hangingBefore = hangingDetector.findHangingPieces(board, currentPlayer);
+    console.log(`📊 Position analysis - Hanging pieces before move: ${hangingBefore.length}`);
     
     if (moveTree && SEARCH_CONFIG.useMemory) {
         const extendedVariations = [];
@@ -2523,7 +2700,7 @@ function makeAIMove() {
 
     if (thinkingElement) thinkingElement.style.display = 'block';
     if (syncStatusElement) {
-        syncStatusElement.textContent = 'AI thinking with v2.5 enhanced evaluation...';
+        syncStatusElement.textContent = 'AI thinking with v2.5.1 enhanced evaluation...';
         syncStatusElement.classList.add('thinking');
     }
 
@@ -2561,7 +2738,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.5 (Threats + King Safety + Pawns + Mobility + Tapered + SEE)';
+        difficultyElement.textContent = 'PMTS v2.5.1 (Hanging Pieces + Tactical Safety)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2618,7 +2795,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Evaluation & SEE!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Hanging Piece Detection & Tactical Safety!`);
 }
 
 function undoMove() {
@@ -2668,7 +2845,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (PMTS v2.5 + Threats + King Safety + Pawns + Mobility)';
+        gameModeDisplay.textContent = 'vs AI (PMTS v2.5.1 + Hanging Piece Detection)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer !== humanPlayer && !gameOver) {
@@ -2695,6 +2872,49 @@ function clearMemory() {
     }
 }
 
+// ========== ADDITIONAL CONSOLE COMMANDS ==========
+
+window.checkHanging = function() {
+    const hangingDetector = new HangingPieceDetector();
+    const whiteHanging = hangingDetector.findHangingPieces(board, 'white');
+    const blackHanging = hangingDetector.findHangingPieces(board, 'black');
+    
+    console.log(`\n⚠️ HANGING PIECES DETECTION:`);
+    console.log(`White hanging pieces: ${whiteHanging.length}`);
+    whiteHanging.forEach(hp => {
+        console.log(`  ${hp.piece} at (${hp.row},${hp.col}) - Value: ${hp.value}, Defenders: ${hp.defenders}, Attackers: ${hp.attackers}${hp.isUndefended ? ' [UNDEFENDED]' : ''}`);
+    });
+    
+    console.log(`\nBlack hanging pieces: ${blackHanging.length}`);
+    blackHanging.forEach(hp => {
+        console.log(`  ${hp.piece} at (${hp.row},${hp.col}) - Value: ${hp.value}, Defenders: ${hp.defenders}, Attackers: ${hp.attackers}${hp.isUndefended ? ' [UNDEFENDED]' : ''}`);
+    });
+    
+    const whitePenalty = hangingDetector.calculateHangingPenalty(board, 'white');
+    const blackPenalty = hangingDetector.calculateHangingPenalty(board, 'black');
+    console.log(`\n📊 Hanging penalties - White: ${whitePenalty}, Black: ${blackPenalty}`);
+    
+    return { whiteHanging, blackHanging };
+};
+
+window.testTacticalSafety = function(moveStr) {
+    const move = parseAlgebraicMove(moveStr);
+    if (!move) {
+        console.log("Invalid move format");
+        return;
+    }
+    
+    const safety = hangingDetector.evaluateMoveTacticalSafety(
+        board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer
+    );
+    
+    console.log(`Tactical safety for ${moveStr}: ${safety}`);
+    console.log(safety < 0 ? "⚠️ This move leaves pieces hanging!" : "✅ This move is tactically safe");
+    
+    return safety;
+};
+
+// ========== EXPORT FOR BROWSER ==========
 if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
@@ -2705,7 +2925,11 @@ if (typeof window !== 'undefined') {
         return ["Endgame engine not loaded"];
     };
     window.analyzePosition = window.analyzePosition;
+    window.checkHanging = window.checkHanging;
+    window.testTacticalSafety = window.testTacticalSafety;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Advanced AI with Threat Detection, King Safety, Pawn Structure, Mobility, Tapered Evaluation & SEE!`);
-console.log(`🎯 New features: analyzePosition() for detailed position analysis!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Fixed Hanging Pieces + Tactical Safety!`);
+console.log(`🎯 New commands: checkHanging() - detect hanging pieces, testTacticalSafety('move') - test move safety`);
+console.log(`💡 Type 'help()' for all commands`);
+        

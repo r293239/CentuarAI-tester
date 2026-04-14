@@ -1,239 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.4 - Fixed Timer During AI Thinking + No Time Limit Option
+// VERSION: 2.3.1 - Smart Tactical Awareness (Capture Safety)
 // COMPATIBLE WITH: chess-ai-database.js (v2.0)
 
-const GAME_VERSION = "2.3.4";
-
-// ========== TIME CONTROL SYSTEM (FIXED - RUNS DURING AI THINKING) ==========
-class TimeControl {
-    constructor() {
-        this.initialTime = 600; // 10 minutes in seconds
-        this.increment = 5; // 5 seconds per move
-        this.whiteTime = this.initialTime;
-        this.blackTime = this.initialTime;
-        this.activePlayer = 'white';
-        this.timerInterval = null;
-        this.isActive = false;
-        this.lastTick = 0;
-        this.unlimited = false; // No time limit mode
-    }
-    
-    start(player) {
-        this.stop();
-        this.activePlayer = player || 'white';
-        this.isActive = true;
-        this.lastTick = Date.now();
-        this.startTimer();
-        this.updateDisplay();
-        console.log(`⏰ Timer started for ${this.activePlayer}`);
-    }
-    
-    stop() {
-        this.isActive = false;
-        if (this.timerInterval) {
-            clearInterval(this.timerInterval);
-            this.timerInterval = null;
-        }
-    }
-    
-    pause() {
-        this.isActive = false;
-        if (this.timerInterval) {
-            clearInterval(this.timerInterval);
-            this.timerInterval = null;
-        }
-    }
-    
-    resume() {
-        if (!this.isActive && !gameOver && !this.unlimited) {
-            this.isActive = true;
-            this.lastTick = Date.now();
-            this.startTimer();
-        }
-    }
-    
-    switchPlayer() {
-        if (!this.isActive || gameOver || this.unlimited) return;
-        
-        // Add increment to the player who just moved
-        if (this.activePlayer === 'white') {
-            this.whiteTime += this.increment;
-        } else {
-            this.blackTime += this.increment;
-        }
-        
-        // Switch active player
-        this.activePlayer = this.activePlayer === 'white' ? 'black' : 'white';
-        this.lastTick = Date.now();
-        this.updateDisplay();
-        
-        console.log(`⏰ Timer switched to ${this.activePlayer} | White: ${this.formatTime(this.whiteTime)} | Black: ${this.formatTime(this.blackTime)}`);
-    }
-    
-    startTimer() {
-        if (this.timerInterval) {
-            clearInterval(this.timerInterval);
-        }
-        
-        // Don't start timer if unlimited mode
-        if (this.unlimited) return;
-        
-        this.timerInterval = setInterval(() => {
-            // Timer keeps running even during AI thinking!
-            if (!this.isActive || gameOver || this.unlimited) return;
-            
-            const now = Date.now();
-            const elapsed = (now - this.lastTick) / 1000;
-            this.lastTick = now;
-            
-            if (this.activePlayer === 'white') {
-                this.whiteTime = Math.max(0, this.whiteTime - elapsed);
-                if (this.whiteTime <= 0.01) {
-                    this.whiteTime = 0;
-                    this.timeout('white');
-                }
-            } else {
-                this.blackTime = Math.max(0, this.blackTime - elapsed);
-                if (this.blackTime <= 0.01) {
-                    this.blackTime = 0;
-                    this.timeout('black');
-                }
-            }
-            
-            this.updateDisplay();
-        }, 100);
-    }
-    
-    timeout(player) {
-        this.stop();
-        gameOver = true;
-        const winner = player === 'white' ? 'Black' : 'White';
-        
-        const statusElement = document.getElementById('status');
-        if (statusElement) {
-            statusElement.textContent = `⏰ Time out! ${winner} wins!`;
-            statusElement.classList.add('checkmate');
-        }
-        
-        console.log(`⏰ Time out! ${player} ran out of time. ${winner} wins!`);
-        createBoard();
-        updateStatus();
-    }
-    
-    updateDisplay() {
-        const whiteTimeElement = document.getElementById('white-time');
-        const blackTimeElement = document.getElementById('black-time');
-        const whiteIndicator = document.getElementById('white-active-indicator');
-        const blackIndicator = document.getElementById('black-active-indicator');
-        
-        if (whiteTimeElement) {
-            if (this.unlimited) {
-                whiteTimeElement.textContent = '∞';
-                whiteTimeElement.style.color = '#4CAF50';
-            } else {
-                whiteTimeElement.textContent = this.formatTime(this.whiteTime);
-                if (this.whiteTime < 60) {
-                    whiteTimeElement.style.color = '#ff6b6b';
-                } else {
-                    whiteTimeElement.style.color = '#4CAF50';
-                }
-            }
-        }
-        
-        if (blackTimeElement) {
-            if (this.unlimited) {
-                blackTimeElement.textContent = '∞';
-                blackTimeElement.style.color = '#4CAF50';
-            } else {
-                blackTimeElement.textContent = this.formatTime(this.blackTime);
-                if (this.blackTime < 60) {
-                    blackTimeElement.style.color = '#ff6b6b';
-                } else {
-                    blackTimeElement.style.color = '#4CAF50';
-                }
-            }
-        }
-        
-        // Update active indicators
-        if (whiteIndicator) {
-            whiteIndicator.style.display = (this.activePlayer === 'white' && this.isActive && !this.unlimited) ? 'inline' : 'none';
-        }
-        if (blackIndicator) {
-            blackIndicator.style.display = (this.activePlayer === 'black' && this.isActive && !this.unlimited) ? 'inline' : 'none';
-        }
-        
-        // Highlight active row
-        const whiteRow = document.querySelector('.white-time-row');
-        const blackRow = document.querySelector('.black-time-row');
-        
-        if (whiteRow) {
-            whiteRow.style.boxShadow = (this.activePlayer === 'white' && this.isActive && !this.unlimited) 
-                ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
-        }
-        if (blackRow) {
-            blackRow.style.boxShadow = (this.activePlayer === 'black' && this.isActive && !this.unlimited) 
-                ? '0 0 15px rgba(76, 175, 80, 0.5)' : 'none';
-        }
-    }
-    
-    formatTime(seconds) {
-        if (seconds <= 0) return '0:00';
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
-    }
-    
-    setTimeControl(minutes, increment) {
-        if (minutes === 0 || minutes === 'unlimited') {
-            this.unlimited = true;
-            this.stop();
-            this.initialTime = 0;
-            this.increment = 0;
-            console.log(`⏰ Time control: No limit`);
-        } else {
-            this.unlimited = false;
-            this.initialTime = minutes * 60;
-            this.increment = increment;
-            this.whiteTime = this.initialTime;
-            this.blackTime = this.initialTime;
-            console.log(`⏰ Time control set to ${minutes}+${increment}`);
-        }
-        this.updateDisplay();
-    }
-    
-    reset() {
-        this.stop();
-        if (!this.unlimited) {
-            this.whiteTime = this.initialTime;
-            this.blackTime = this.initialTime;
-        }
-        this.activePlayer = 'white';
-        this.updateDisplay();
-    }
-    
-    getTime(player) {
-        if (this.unlimited) return Infinity;
-        return player === 'white' ? this.whiteTime : this.blackTime;
-    }
-    
-    syncWithPlayer(currentGamePlayer) {
-        if (!this.isActive || gameOver || this.unlimited) return;
-        
-        if (this.activePlayer !== currentGamePlayer) {
-            console.log(`⏰ Syncing timer: ${this.activePlayer} -> ${currentGamePlayer}`);
-            this.activePlayer = currentGamePlayer;
-            this.lastTick = Date.now();
-            this.updateDisplay();
-        }
-    }
-    
-    isUnlimited() {
-        return this.unlimited;
-    }
-}
-
-let timeControl = new TimeControl();
+const GAME_VERSION = "2.3.1";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -516,30 +286,141 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-const ENDGAME_PIECE_SQUARE_TABLES = {
-    '♔': [
-        [-50, -40, -30, -20, -20, -30, -40, -50],
-        [-30, -20, -10, 0, 0, -10, -20, -30],
-        [-30, -10, 20, 30, 30, 20, -10, -30],
-        [-30, -10, 30, 40, 40, 30, -10, -30],
-        [-30, -10, 30, 40, 40, 30, -10, -30],
-        [-30, -10, 20, 30, 30, 20, -10, -30],
-        [-30, -30, 0, 0, 0, 0, -30, -30],
-        [-50, -30, -30, -30, -30, -30, -30, -50]
-    ],
-    '♚': [
-        [-50, -30, -30, -30, -30, -30, -30, -50],
-        [-30, -30, 0, 0, 0, 0, -30, -30],
-        [-30, -10, 20, 30, 30, 20, -10, -30],
-        [-30, -10, 30, 40, 40, 30, -10, -30],
-        [-30, -10, 30, 40, 40, 30, -10, -30],
-        [-30, -10, 20, 30, 30, 20, -10, -30],
-        [-30, -20, -10, 0, 0, -10, -20, -30],
-        [-50, -40, -30, -20, -20, -30, -40, -50]
-    ]
-};
+// ========== SMART TACTICAL AWARENESS ==========
 
-// Console commands
+// Check if a piece is defended by any friendly piece
+function isPieceDefended(boardState, row, col, player) {
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const piece = boardState[r] && boardState[r][c];
+            if (piece && isPlayerPieceForPosition(piece, player)) {
+                if (canPieceAttackForPosition(piece, r, c, row, col, boardState)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Check if a square is attacked by opponent
+function isSquareAttackedByOpponent(boardState, row, col, player) {
+    const opponent = player === 'white' ? 'black' : 'white';
+    return isSquareAttackedForPosition(boardState, row, col, opponent);
+}
+
+// Evaluate capture safety - checks if capturing leads to material loss
+function evaluateCaptureSafety(boardState, fromRow, fromCol, toRow, toCol, player) {
+    const attacker = boardState[fromRow][fromCol];
+    const victim = boardState[toRow][toCol];
+    
+    if (!victim) return 0; // Not a capture
+    
+    const attackerValue = PIECE_VALUES[attacker] || 0;
+    const victimValue = PIECE_VALUES[victim] || 0;
+    
+    // Simulate the capture
+    const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+    if (!newBoard) return 0;
+    
+    // Check if the capturing piece can be recaptured
+    const canBeRecaptured = isSquareAttackedByOpponent(newBoard, toRow, toCol, player);
+    const isDefendedAfterCapture = isPieceDefended(newBoard, toRow, toCol, player);
+    
+    // If piece can be recaptured and isn't defended, it's a bad trade if the attacker is more valuable
+    if (canBeRecaptured && !isDefendedAfterCapture) {
+        // Check what would recapture it
+        let lowestRecapturerValue = Infinity;
+        const opponent = player === 'white' ? 'black' : 'white';
+        
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const piece = newBoard[r] && newBoard[r][c];
+                if (piece && isPlayerPieceForPosition(piece, opponent)) {
+                    if (canPieceAttackForPosition(piece, r, c, toRow, toCol, newBoard)) {
+                        const val = PIECE_VALUES[piece] || 0;
+                        if (val < lowestRecapturerValue) {
+                            lowestRecapturerValue = val;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Calculate net material change
+        const netChange = victimValue - attackerValue;
+        
+        // If we lose more than we gain, it's a bad capture
+        if (netChange < 0) {
+            return netChange * 2; // Heavy penalty for bad trades
+        }
+        
+        // Even if equal trade, if opponent can recapture with a pawn, it might be bad
+        if (netChange === 0 && lowestRecapturerValue < attackerValue) {
+            return -50;
+        }
+    }
+    
+    // Check if there's a better capture available (simplified)
+    const allMoves = getAllPossibleMovesForPosition(boardState, player);
+    for (const move of allMoves) {
+        const target = boardState[move.toRow][move.toCol];
+        if (target) {
+            const targetVal = PIECE_VALUES[target] || 0;
+            if (targetVal > victimValue) {
+                const altNewBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
+                const altCanBeRecaptured = isSquareAttackedByOpponent(altNewBoard, move.toRow, move.toCol, player);
+                const altIsDefended = isPieceDefended(altNewBoard, move.toRow, move.toCol, player);
+                
+                if (!altCanBeRecaptured || altIsDefended) {
+                    return -30; // Penalty for choosing worse capture
+                }
+            }
+        }
+    }
+    
+    // Bonus for winning material safely
+    if (victimValue > attackerValue && (!canBeRecaptured || isDefendedAfterCapture)) {
+        return (victimValue - attackerValue) * 0.5;
+    }
+    
+    return 0;
+}
+
+// Check if a move hangs a piece (leaves it undefended and attacked)
+function wouldHangPiece(boardState, fromRow, fromCol, toRow, toCol, player) {
+    const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+    if (!newBoard) return false;
+    
+    const piece = boardState[fromRow][fromCol];
+    const pieceValue = PIECE_VALUES[piece] || 0;
+    
+    // Don't worry about hanging if moving a low-value piece
+    if (pieceValue <= 100) return false;
+    
+    // Check if any of our pieces become hanging after the move
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const p = newBoard[r] && newBoard[r][c];
+            if (p && isPlayerPieceForPosition(p, player) && p !== '♔' && p !== '♚') {
+                const val = PIECE_VALUES[p] || 0;
+                if (val >= 300) { // Only care about minor pieces and up
+                    const attacked = isSquareAttackedByOpponent(newBoard, r, c, player);
+                    const defended = isPieceDefended(newBoard, r, c, player);
+                    
+                    if (attacked && !defended) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
+// ========== CONSOLE COMMANDS ==========
+
 window.displayBoard = function() {
     console.log("\n  a b c d e f g h");
     for (let row = 0; row < 8; row++) {
@@ -552,11 +433,6 @@ window.displayBoard = function() {
     }
     console.log(`\nCurrent player: ${currentPlayer}`);
     console.log(`Game over: ${gameOver}`);
-    if (!timeControl.isUnlimited()) {
-        console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
-    } else {
-        console.log(`Time: No limit`);
-    }
     if (isKingInCheck(board, currentPlayer)) {
         console.log(`⚠️ ${currentPlayer} is in check!`);
     }
@@ -773,18 +649,6 @@ window.setMode = function(mode) {
     }
 };
 
-window.setTimeControl = function(minutes, increment) {
-    if (minutes === 0 || minutes === 'unlimited' || minutes === 'none') {
-        timeControl.setTimeControl(0, 0);
-        console.log(`Time control: No limit`);
-    } else {
-        timeControl.setTimeControl(minutes, increment || 0);
-        console.log(`Time control set to ${minutes}+${increment || 0}`);
-    }
-    updateAIStats();
-    return `Time control: ${minutes === 0 ? 'No limit' : minutes + '+' + (increment || 0)}`;
-};
-
 window.switchSide = function() {
     switchSides();
     return `Switched sides. Human now plays ${humanPlayer}`;
@@ -792,18 +656,13 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION}`);
+    console.log(`Version: ${GAME_VERSION} (Smart Tactical Awareness)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
     console.log(`Game over: ${gameOver}`);
     console.log(`Human plays: ${humanPlayer}`);
     console.log(`AI plays: ${aiPlayer}`);
-    if (timeControl.isUnlimited()) {
-        console.log(`Time: No limit`);
-    } else {
-        console.log(`Time - White: ${timeControl.formatTime(timeControl.whiteTime)}, Black: ${timeControl.formatTime(timeControl.blackTime)}`);
-    }
     
     if (moveTree) {
         const stats = moveTree.getStats();
@@ -837,14 +696,47 @@ window.clearMemory = function() {
     return "Memory cleared";
 };
 
+window.analyzeCapture = function(moveStr) {
+    const move = parseAlgebraicMove(moveStr);
+    if (!move) {
+        console.log("Invalid move format");
+        return;
+    }
+    
+    const boardState = board;
+    const target = boardState[move.toRow][move.toCol];
+    
+    if (!target) {
+        console.log("Not a capture move");
+        return;
+    }
+    
+    const safety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+    const wouldHang = wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+    
+    console.log(`\n📊 Capture Analysis for ${moveStr}:`);
+    console.log(`  Capture safety score: ${safety}`);
+    console.log(`  Would hang a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
+    
+    if (safety < 0) {
+        console.log(`  ⚠️ WARNING: This capture may be unfavorable!`);
+    } else if (safety > 0) {
+        console.log(`  ✅ This capture looks good!`);
+    }
+    
+    return { safety, wouldHang };
+};
+
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.4                ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.1                ║");
+    console.log("║                 (Smart Tactical Awareness)                     ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
     console.log("  setFEN('fen')      - Set position from FEN");
     console.log("  getFEN()           - Get current FEN");
+    console.log("  setup('name')      - Setup test position");
     console.log("\n🎮 MOVES:");
     console.log("  move('e2e4')       - Make a move");
     console.log("  legalMoves()       - Show all legal moves");
@@ -855,10 +747,8 @@ window.help = function() {
     console.log("  setDepth(n)        - Set AI depth (1-6)");
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
-    console.log("\n⏰ TIME CONTROL:");
-    console.log("  setTimeControl(10, 5)  - Set 10 min + 5 sec");
-    console.log("  setTimeControl(0, 0)   - No time limit");
-    console.log("  setTimeControl('unlimited') - No time limit");
+    console.log("\n🎯 TACTICAL ANALYSIS (NEW!):");
+    console.log("  analyzeCapture('e4d5') - Check if a capture is safe");
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
@@ -933,13 +823,9 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Risk Assessment + Time Control`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - PMTS with Smart Tactical Awareness`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
-    if (timeControl.isUnlimited()) {
-        console.log(`⏰ Time Control: No limit`);
-    } else {
-        console.log(`⏰ Time Control: ${timeControl.initialTime/60}+${timeControl.increment}`);
-    }
+    console.log(`🎯 Features: Capture safety analysis, hanging piece detection`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -970,13 +856,9 @@ window.addEventListener('load', function() {
     changeGameMode();
     displayVersion();
     
-    // Start the timer when game loads
-    timeControl.reset();
-    timeControl.start('white');
-    
-    console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
-    console.log(`⏰ Timer started! White to move.`);
-    console.log(`💡 Type 'help()' in console to see available commands!`);
+    console.log(`♔ Chess Game v${GAME_VERSION} Loaded with Smart Tactical Awareness! ♛`);
+    console.log(`💡 New command: analyzeCapture('e4d5') - Check if a capture is safe`);
+    console.log(`💡 Type 'help()' in console to see all commands!`);
 });
 
 function createBoard() {
@@ -1387,9 +1269,6 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
     if (moveTree) {
         moveTree.pruneInactiveLines(moveTree.activeLineMoves);
     }
-    
-    // Handle time control - switch timer to other player
-    timeControl.switchPlayer();
 }
 
 function updateCastlingRights(piece, fromRow, fromCol, toRow, toCol) {
@@ -1420,7 +1299,6 @@ function updateHalfMoveClock(piece, capturedPiece) {
 
 function switchPlayer() {
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    timeControl.syncWithPlayer(currentPlayer);
 }
 
 function updateStatus() {
@@ -1435,15 +1313,12 @@ function updateStatus() {
         statusElement.textContent = `Checkmate! ${winner} wins!`;
         statusElement.classList.add('checkmate');
         gameOver = true;
-        timeControl.stop();
     } else if (isStalemate()) {
         statusElement.textContent = 'Stalemate! Draw!';
         gameOver = true;
-        timeControl.stop();
     } else if (isDraw()) {
         statusElement.textContent = 'Draw!';
         gameOver = true;
-        timeControl.stop();
     } else if (isKingInCheck(board, currentPlayer)) {
         statusElement.textContent = `${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)} is in check!`;
         statusElement.classList.add('check');
@@ -1707,25 +1582,23 @@ function isEndgamePositionForPosition(boardState) {
     if (!boardState) return false;
     
     let pieceCount = 0;
-    let queenCount = 0;
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece && piece !== '♔' && piece !== '♚') {
                 pieceCount++;
-                if (piece === '♕' || piece === '♛') queenCount++;
             }
         }
     }
-    return pieceCount <= 10 || (pieceCount <= 12 && queenCount === 0);
+    return pieceCount <= 10;
 }
 
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
     let evaluation = 0;
-    const isEndgame = isEndgamePositionForPosition(boardState);
 
+    // Material evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1736,115 +1609,32 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
+    // Positional evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
-            if (piece) {
-                let tableValue = 0;
-                
-                if (isEndgame && (piece === '♔' || piece === '♚') && ENDGAME_PIECE_SQUARE_TABLES[piece]) {
-                    tableValue = ENDGAME_PIECE_SQUARE_TABLES[piece][row][col];
-                } else if (PIECE_SQUARE_TABLES[piece]) {
-                    tableValue = PIECE_SQUARE_TABLES[piece][row][col];
-                }
-                
+            if (piece && PIECE_SQUARE_TABLES[piece]) {
+                const tableValue = PIECE_SQUARE_TABLES[piece][row][col];
                 evaluation += isPlayerPieceForPosition(piece, 'white') ? tableValue : -tableValue;
             }
         }
     }
 
-    const centerBonus = 25;
+    // Center control
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
         const piece = boardState[r] && boardState[r][c];
         if (piece) {
-            evaluation += isPlayerPieceForPosition(piece, 'white') ? centerBonus : -centerBonus;
+            evaluation += isPlayerPieceForPosition(piece, 'white') ? 30 : -30;
         }
     }
 
+    // Mobility
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
-    evaluation += (whiteMoves - blackMoves) * 8;
-
-    if (!isEndgame) {
-        const whiteKingPos = findKing(boardState, 'white');
-        const blackKingPos = findKing(boardState, 'black');
-        
-        if (whiteKingPos) {
-            const whitePawnShield = countPawnShield(boardState, whiteKingPos, 'white');
-            evaluation += whitePawnShield * 15;
-        }
-        if (blackKingPos) {
-            const blackPawnShield = countPawnShield(boardState, blackKingPos, 'black');
-            evaluation -= blackPawnShield * 15;
-        }
-    }
-
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece && piece !== '♔' && piece !== '♚') {
-                const pieceColor = isPlayerPieceForPosition(piece, 'white') ? 'white' : 'black';
-                const isAttacked = isSquareAttackedForPosition(boardState, row, col, pieceColor === 'white' ? 'black' : 'white');
-                const isDefended = isSquareDefendedForPosition(boardState, row, col, pieceColor);
-                
-                if (isAttacked && !isDefended) {
-                    const pieceValue = PIECE_VALUES[piece] || 0;
-                    if (pieceColor === 'white') {
-                        evaluation -= pieceValue * 0.5;
-                    } else {
-                        evaluation += pieceValue * 0.5;
-                    }
-                }
-            }
-        }
-    }
+    evaluation += (whiteMoves - blackMoves) * 5;
 
     return evaluation;
-}
-
-function findKing(boardState, player) {
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row] && boardState[row][col] === kingSymbol) {
-                return { row, col };
-            }
-        }
-    }
-    return null;
-}
-
-function countPawnShield(boardState, kingPos, player) {
-    let shieldCount = 0;
-    const pawnSymbol = player === 'white' ? '♙' : '♟';
-    const direction = player === 'white' ? -1 : 1;
-    
-    for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
-        if (col >= 0 && col < 8) {
-            const shieldRow = kingPos.row + direction;
-            if (shieldRow >= 0 && shieldRow < 8) {
-                if (boardState[shieldRow][col] === pawnSymbol) {
-                    shieldCount++;
-                }
-            }
-        }
-    }
-    return shieldCount;
-}
-
-function isSquareDefendedForPosition(boardState, targetRow, targetCol, defenderColor) {
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece && isPlayerPieceForPosition(piece, defenderColor)) {
-                if (canPieceAttackForPosition(piece, row, col, targetRow, targetCol, boardState)) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
 }
 
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
@@ -1873,9 +1663,16 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
+    // Sort moves - captures first, then by tactical safety
     moves.sort((a, b) => {
         const targetA = boardState[a.toRow][a.toCol];
         const targetB = boardState[b.toRow][b.toCol];
+        
+        // Captures first
+        if (targetA && !targetB) return -1;
+        if (!targetA && targetB) return 1;
+        
+        // Then by piece value
         const valueA = targetA ? PIECE_VALUES[targetA] : 0;
         const valueB = targetB ? PIECE_VALUES[targetB] : 0;
         return valueB - valueA;
@@ -1887,10 +1684,35 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
+            // Skip obviously bad captures
+            const targetPiece = boardState[move.toRow][move.toCol];
+            if (targetPiece) {
+                const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                if (captureSafety < -100) {
+                    continue; // Skip terrible captures
+                }
+            }
+            
+            // Skip moves that hang pieces
+            if (wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player)) {
+                // Still consider it but with a penalty (by continuing, not skipping entirely)
+            }
+            
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, false, nextPlayer, moveNumber + 1, trackWorstCase);
             
-            const evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            let evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            
+            // Apply tactical penalties
+            if (targetPiece) {
+                const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                evalValue += captureSafety;
+            }
+            
+            if (wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player)) {
+                evalValue -= 80; // Penalty for hanging a piece
+            }
+            
             maxEval = Math.max(maxEval, evalValue);
             if (trackWorstCase) {
                 const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
@@ -1908,10 +1730,30 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
+            // Skip obviously bad captures
+            const targetPiece = boardState[move.toRow][move.toCol];
+            if (targetPiece) {
+                const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                if (captureSafety < -100) {
+                    continue;
+                }
+            }
+            
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, trackWorstCase);
             
-            const evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            let evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
+            
+            // Apply tactical penalties
+            if (targetPiece) {
+                const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
+                evalValue -= captureSafety; // Note: subtract because minimizing player
+            }
+            
+            if (wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player)) {
+                evalValue += 80; // Penalty for hanging a piece (reverse for minimizing)
+            }
+            
             minEval = Math.min(minEval, evalValue);
             if (trackWorstCase) {
                 const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
@@ -1930,6 +1772,7 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
+    // Try opening book first if available
     if (enhancedAI && moveHistory.length < 12) {
         const openingMoveAlgebraic = enhancedAI.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1942,21 +1785,9 @@ function findBestMoveWithRiskAssessment() {
     }
     
     const isEndgame = isEndgamePositionForPosition(board);
+    const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    const timeRemaining = timeControl.getTime(currentPlayer);
-    let searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
-    
-    // Only adjust depth if time control is active (not unlimited)
-    if (!timeControl.isUnlimited()) {
-        if (timeRemaining < 30) {
-            searchDepth = Math.max(2, searchDepth - 1);
-        } else if (timeRemaining < 60) {
-            searchDepth = Math.max(2, searchDepth);
-        }
-    }
-    
-    const timeDisplay = timeControl.isUnlimited() ? '∞' : timeControl.formatTime(timeRemaining);
-    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth} (time: ${timeDisplay})`);
+    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth} with tactical awareness`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -1984,7 +1815,21 @@ function findBestMoveWithRiskAssessment() {
                 currentPlayer === 'white' ? 'black' : 'white', moveCount + 1, true);
             
             const worstCase = typeof worstResult === 'object' ? worstResult.best : worstResult;
-            const bestCase = typeof bestResult === 'object' ? bestResult.best : bestResult;
+            let bestCase = typeof bestResult === 'object' ? bestResult.best : bestResult;
+            
+            // Apply tactical evaluation for captures
+            const targetPiece = board[move.toRow][move.toCol];
+            if (targetPiece) {
+                const captureSafety = evaluateCaptureSafety(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+                bestCase += captureSafety;
+                console.log(`  Capture ${toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)} safety: ${captureSafety > 0 ? '✅' : '⚠️'} ${captureSafety}`);
+            }
+            
+            // Penalize moves that hang pieces
+            if (wouldHangPiece(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer)) {
+                bestCase -= 80;
+                console.log(`  ⚠️ Move ${toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)} hangs a piece!`);
+            }
             
             evaluatedMoves.push({
                 move,
@@ -1999,6 +1844,7 @@ function findBestMoveWithRiskAssessment() {
         }
     }
     
+    // Sort for black differently
     if (currentPlayer === 'black') {
         evaluatedMoves.sort((a, b) => a.bestCase - b.bestCase);
     } else {
@@ -2017,7 +1863,7 @@ function findBestMoveWithRiskAssessment() {
     }
     
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
-    console.log(`⏱️ Search time: ${searchTime}ms | Selected move eval: ${bestSafeMove.bestCase} | Risk: ${bestSafeMove.riskScore}`);
+    console.log(`⏱️ Search time: ${searchTime}ms | Selected move: ${toAlgebraicMove(bestSafeMove.move.fromRow, bestSafeMove.move.fromCol, bestSafeMove.move.toRow, bestSafeMove.move.toCol)} | Eval: ${bestSafeMove.bestCase}`);
     
     return bestSafeMove.move;
 }
@@ -2025,8 +1871,6 @@ function findBestMoveWithRiskAssessment() {
 function findBestMove() {
     return findBestMoveWithRiskAssessment();
 }
-
-// ========== AI MOVE EXECUTION (TIMER KEEPS RUNNING) ==========
 
 function makeAIMove() {
     if (isThinking || gameOver) return;
@@ -2042,9 +1886,6 @@ function makeAIMove() {
         syncStatusElement.classList.add('thinking');
     }
 
-    // IMPORTANT: Do NOT pause the timer! Let it keep running during AI thinking
-    
-    // Use setTimeout to not block the UI
     setTimeout(() => {
         const bestMove = findBestMove();
         if (bestMove) {
@@ -2064,10 +1905,8 @@ function makeAIMove() {
             const stats = moveTree.getStats();
             console.log(`📊 Memory stats: ${stats.totalMoves} moves cached`);
         }
-    }, 100); // Small delay to let UI update
+    }, 300);
 }
-
-// ========== UI FUNCTIONS ==========
 
 function updateAIStats() {
     const gamesPlayedElement = document.getElementById('games-played');
@@ -2081,11 +1920,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        if (timeControl.isUnlimited()) {
-            difficultyElement.textContent = `PMTS v2.3.4 (No limit)`;
-        } else {
-            difficultyElement.textContent = `PMTS v2.3.4 (${timeControl.initialTime/60}+${timeControl.increment})`;
-        }
+        difficultyElement.textContent = 'PMTS v2.3.1 (Tactical)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2126,10 +1961,6 @@ function newGame() {
     if (moveTree) {
         moveTree.activeLineMoves = [];
     }
-    
-    // Reset and start time control
-    timeControl.reset();
-    timeControl.start('white');
 
     createBoard();
     updateStatus();
@@ -2146,13 +1977,9 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION}`);
-    if (timeControl.isUnlimited()) {
-        console.log(`⏰ Time: No limit`);
-    } else {
-        console.log(`⏰ Timer started! White: ${timeControl.formatTime(timeControl.whiteTime)} | Black: ${timeControl.formatTime(timeControl.blackTime)}`);
-    }
+    console.log(`🎯 New game started! ${GAME_VERSION} with Smart Tactical Awareness!`);
     
+    // If AI plays white and human plays black, make AI move
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
     }
@@ -2184,11 +2011,6 @@ function undoMove() {
     if (statusElement) {
         statusElement.classList.remove('checkmate', 'check');
     }
-    
-    timeControl.syncWithPlayer(currentPlayer);
-    if (!timeControl.isActive && !gameOver) {
-        timeControl.resume();
-    }
 }
 
 function switchSides() {
@@ -2212,16 +2034,8 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        if (timeControl.isUnlimited()) {
-            gameModeDisplay.textContent = `vs AI (No limit)`;
-        } else {
-            gameModeDisplay.textContent = `vs AI (${timeControl.initialTime/60}+${timeControl.increment})`;
-        }
+        gameModeDisplay.textContent = 'vs AI (Tactical v2.3.1)';
         if (aiInfo) aiInfo.style.display = 'block';
-        
-        if (!timeControl.isActive && !gameOver) {
-            timeControl.start(currentPlayer);
-        }
 
         if (currentPlayer === aiPlayer && !gameOver) {
             setTimeout(makeAIMove, 500);
@@ -2244,21 +2058,12 @@ function clearMemory() {
     }
 }
 
-// Expose functions for debugging
 if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
-    window.setTimeControl = (min, inc) => {
-        if (min === 0 || min === 'unlimited' || min === 'none') {
-            timeControl.setTimeControl(0, 0);
-        } else {
-            timeControl.setTimeControl(min, inc || 0);
-        }
-        updateAIStats();
-        console.log(`Time control: ${min === 0 ? 'No limit' : min + '+' + (inc || 0)}`);
-    };
+    window.analyzeCapture = window.analyzeCapture;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Timer runs during AI thinking + No limit option!`);
-console.log(`⏰ Commands: setTimeControl(10, 5) or setTimeControl(0, 0) for no limit`);
-console.log(`💡 Type 'help()' for all commands`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Smart Tactical Awareness!`);
+console.log(`🎯 AI now checks if captures can be recaptured and avoids hanging pieces!`);
+console.log(`💡 Try: analyzeCapture('e4d5') to check if a capture is safe!`);

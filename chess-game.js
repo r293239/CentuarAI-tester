@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.3.2 - Fixed Perpetual Checks + Black Piece Tables + Smart Tactical Awareness
+// VERSION: 2.3.3 - Smart Perpetual Check (Only When Losing) + Anti-Blunder
 // COMPATIBLE WITH: chess-ai-database.js (v2.0)
 
-const GAME_VERSION = "2.3.2";
+const GAME_VERSION = "2.3.3";
 
 // ========== PERSISTENT MEMORY TREE SYSTEM ==========
 class PersistentMoveTree {
@@ -196,9 +196,8 @@ let halfMoveCount = 0;
 let lastMove = null;
 let isThinking = false;
 
-// Position repetition tracking for perpetual check detection
 let positionHistory = [];
-let checkHistory = []; // Track consecutive checks
+let checkHistory = [];
 
 let castlingRights = {
     whiteKingside: true,
@@ -227,7 +226,7 @@ const PIECE_VALUES = {
     '': 0
 };
 
-// Standard piece-square tables (from White's perspective)
+// Standard piece-square tables
 const PIECE_SQUARE_TABLES = {
     '♙': [
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -291,10 +290,8 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-// DEDICATED PIECE-SQUARE TABLES FOR BLACK (flipped perspective)
-// These tables encourage black to play actively
 const BLACK_PIECE_SQUARE_TABLES = {
-    '♟': [  // Black pawns - want to advance toward white's side
+    '♟': [
         [0, 0, 0, 0, 0, 0, 0, 0],
         [5, 10, 10, -20, -20, 10, 10, 5],
         [5, -5, -10, 0, 0, -10, -5, 5],
@@ -304,7 +301,7 @@ const BLACK_PIECE_SQUARE_TABLES = {
         [50, 50, 50, 50, 50, 50, 50, 50],
         [0, 0, 0, 0, 0, 0, 0, 0]
     ],
-    '♞': [  // Black knights - aggressive positioning
+    '♞': [
         [-50, -40, -30, -30, -30, -30, -40, -50],
         [-40, -20, 0, 5, 5, 0, -20, -40],
         [-30, 5, 10, 15, 15, 10, 5, -30],
@@ -314,7 +311,7 @@ const BLACK_PIECE_SQUARE_TABLES = {
         [-40, -20, 0, 0, 0, 0, -20, -40],
         [-50, -40, -30, -30, -30, -30, -40, -50]
     ],
-    '♝': [  // Black bishops - control long diagonals
+    '♝': [
         [-20, -10, -10, -10, -10, -10, -10, -20],
         [-10, 5, 0, 0, 0, 0, 5, -10],
         [-10, 10, 10, 10, 10, 10, 10, -10],
@@ -324,7 +321,7 @@ const BLACK_PIECE_SQUARE_TABLES = {
         [-10, 0, 0, 0, 0, 0, 0, -10],
         [-20, -10, -10, -10, -10, -10, -10, -20]
     ],
-    '♜': [  // Black rooks - open files
+    '♜': [
         [0, 0, 0, 5, 5, 0, 0, 0],
         [-5, 0, 0, 0, 0, 0, 0, -5],
         [-5, 0, 0, 0, 0, 0, 0, -5],
@@ -334,7 +331,7 @@ const BLACK_PIECE_SQUARE_TABLES = {
         [5, 10, 10, 10, 10, 10, 10, 5],
         [0, 0, 0, 0, 0, 0, 0, 0]
     ],
-    '♛': [  // Black queen - active but safe
+    '♛': [
         [-20, -10, -10, -5, -5, -10, -10, -20],
         [-10, 0, 5, 0, 0, 0, 0, -10],
         [-10, 5, 5, 5, 5, 5, 0, -10],
@@ -344,7 +341,7 @@ const BLACK_PIECE_SQUARE_TABLES = {
         [-10, 0, 0, 0, 0, 0, 0, -10],
         [-20, -10, -10, -5, -5, -10, -10, -20]
     ],
-    '♚': [  // Black king - safety in opening, active in endgame
+    '♚': [
         [20, 30, 10, 0, 0, 10, 30, 20],
         [20, 20, 0, 0, 0, 0, 20, 20],
         [-10, -20, -20, -20, -20, -20, -20, -10],
@@ -356,7 +353,6 @@ const BLACK_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// Endgame piece-square tables
 const ENDGAME_PIECE_SQUARE_TABLES = {
     '♔': [
         [-50, -40, -30, -20, -20, -30, -40, -50],
@@ -380,7 +376,21 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== PERPETUAL CHECK DETECTION ==========
+// ========== SMART EVALUATION HELPERS ==========
+
+function getMaterialScore(boardState, player) {
+    let score = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row] && boardState[row][col];
+            if (piece) {
+                const value = PIECE_VALUES[piece] || 0;
+                score += isPlayerPieceForPosition(piece, player) ? value : -value;
+            }
+        }
+    }
+    return score;
+}
 
 function getSimplePositionKey(boardState) {
     let key = '';
@@ -393,41 +403,35 @@ function getSimplePositionKey(boardState) {
     return key;
 }
 
-function isPerpetualCheck(boardState, player) {
-    // Count how many times we've given check recently
+function isPerpetualCheckOpportunity(boardState, player) {
+    const materialScore = getMaterialScore(boardState, player);
     const opponent = player === 'white' ? 'black' : 'white';
     
-    if (!isKingInCheckForPosition(boardState, opponent)) {
+    // Only consider perpetual check if we're losing by at least a minor piece
+    if (materialScore > -300) {
         return false;
     }
     
-    // Check if this is a repeated position (perpetual check pattern)
-    const posKey = getSimplePositionKey(boardState);
-    let repeatCount = 0;
-    for (let i = positionHistory.length - 1; i >= 0; i--) {
-        if (positionHistory[i] === posKey) {
-            repeatCount++;
+    // Check if opponent's king is exposed
+    const opponentKingPos = findKing(boardState, opponent);
+    if (!opponentKingPos) return false;
+    
+    // Count how many checking pieces we have near the king
+    let checkingPotential = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row] && boardState[row][col];
+            if (piece && isPlayerPieceForPosition(piece, player)) {
+                const distance = Math.abs(row - opponentKingPos.row) + Math.abs(col - opponentKingPos.col);
+                if (distance <= 3 && piece !== '♔' && piece !== '♚') {
+                    checkingPotential++;
+                }
+            }
         }
     }
     
-    // If position has occurred multiple times and we're giving check, it's likely perpetual
-    return repeatCount >= 2;
-}
-
-function countConsecutiveChecks(boardState, player) {
-    const opponent = player === 'white' ? 'black' : 'white';
-    let checkCount = 0;
-    
-    // Look through recent positions to count consecutive checks
-    for (let i = checkHistory.length - 1; i >= 0; i--) {
-        if (checkHistory[i].checkingPlayer === player) {
-            checkCount++;
-        } else {
-            break;
-        }
-    }
-    
-    return checkCount;
+    // Need at least one piece that can give check
+    return checkingPotential >= 1;
 }
 
 function evaluateCheckQuality(boardState, move, player) {
@@ -435,18 +439,14 @@ function evaluateCheckQuality(boardState, move, player) {
     const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
     
     if (!isKingInCheckForPosition(newBoard, opponent)) {
-        return 0; // Not a check
+        return 0;
     }
     
-    let score = 0;
+    let score = 10; // Base bonus for giving check
     
-    // Base small bonus for giving check
-    score += 10;
-    
-    // Check if check leads to material gain
     const allOpponentMoves = getAllPossibleMovesForPosition(newBoard, opponent);
     
-    // If opponent has very few moves, it's a strong check
+    // Strong check if opponent has few moves
     if (allOpponentMoves.length <= 3) {
         score += 30;
     }
@@ -460,23 +460,26 @@ function evaluateCheckQuality(boardState, move, player) {
         const isDefended = isPieceDefended(newBoard, move.toRow, move.toCol, player);
         
         if (!isDefended) {
-            // Undefended checking piece that can be captured - bad check!
+            // Bad check - we lose material
             score -= pieceValue * 0.8;
         }
     }
     
-    // Check if this is a perpetual check (repetitive checking without progress)
-    if (isPerpetualCheck(newBoard, player)) {
-        score -= 200; // Heavy penalty for perpetual check
+    // If we're losing, perpetual check is GOOD
+    const materialScore = getMaterialScore(boardState, player);
+    if (materialScore < -200) {
+        const isPerpetual = isPerpetualCheckOpportunity(boardState, player);
+        if (isPerpetual) {
+            score += 150; // Big bonus for perpetual when losing!
+        }
+    } else {
+        // If we're winning or equal, don't chase pointless checks
+        const consecutiveChecks = countConsecutiveChecks(boardState, player);
+        if (consecutiveChecks >= 3) {
+            score -= 40 * (consecutiveChecks - 2);
+        }
     }
     
-    // Penalty for too many consecutive checks without progress
-    const consecutiveChecks = countConsecutiveChecks(boardState, player);
-    if (consecutiveChecks >= 3) {
-        score -= 50 * (consecutiveChecks - 2);
-    }
-    
-    // Bonus if check is part of a mating sequence
     if (allOpponentMoves.length === 0) {
         score += 10000; // Checkmate!
     }
@@ -484,7 +487,17 @@ function evaluateCheckQuality(boardState, move, player) {
     return score;
 }
 
-// ========== SMART TACTICAL AWARENESS ==========
+function countConsecutiveChecks(boardState, player) {
+    let checkCount = 0;
+    for (let i = checkHistory.length - 1; i >= 0; i--) {
+        if (checkHistory[i].checkingPlayer === player) {
+            checkCount++;
+        } else {
+            break;
+        }
+    }
+    return checkCount;
+}
 
 function isPieceDefended(boardState, row, col, player) {
     for (let r = 0; r < 8; r++) {
@@ -521,34 +534,19 @@ function evaluateCaptureSafety(boardState, fromRow, fromCol, toRow, toCol, playe
     const isDefendedAfterCapture = isPieceDefended(newBoard, toRow, toCol, player);
     
     if (canBeRecaptured && !isDefendedAfterCapture) {
-        let lowestRecapturerValue = Infinity;
-        const opponent = player === 'white' ? 'black' : 'white';
-        
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                const piece = newBoard[r] && newBoard[r][c];
-                if (piece && isPlayerPieceForPosition(piece, opponent)) {
-                    if (canPieceAttackForPosition(piece, r, c, toRow, toCol, newBoard)) {
-                        const val = PIECE_VALUES[piece] || 0;
-                        if (val < lowestRecapturerValue) {
-                            lowestRecapturerValue = val;
-                        }
-                    }
-                }
-            }
-        }
-        
         const netChange = victimValue - attackerValue;
         
         if (netChange < 0) {
-            return netChange * 2;
+            return netChange * 2; // Heavy penalty for bad trades
         }
         
-        if (netChange === 0 && lowestRecapturerValue < attackerValue) {
-            return -50;
+        // Equal trade but we lose a more active piece
+        if (netChange === 0) {
+            return -30;
         }
     }
     
+    // Bonus for winning material safely
     if (victimValue > attackerValue && (!canBeRecaptured || isDefendedAfterCapture)) {
         return (victimValue - attackerValue) * 0.5;
     }
@@ -599,6 +597,8 @@ window.displayBoard = function() {
     }
     console.log(`\nCurrent player: ${currentPlayer}`);
     console.log(`Game over: ${gameOver}`);
+    const material = getMaterialScore(board, currentPlayer);
+    console.log(`Material advantage: ${material > 0 ? '+' : ''}${material}`);
     if (isKingInCheck(board, currentPlayer)) {
         console.log(`⚠️ ${currentPlayer} is in check!`);
     }
@@ -768,8 +768,10 @@ window.legalMoves = function() {
 
 window.eval = function() {
     const score = evaluatePositionForSearch(board, currentPlayer, moveCount);
+    const material = getMaterialScore(board, currentPlayer);
     const isEndgame = isEndgamePositionForPosition(board);
     console.log(`Position evaluation: ${score}`);
+    console.log(`Material advantage: ${material > 0 ? '+' : ''}${material}`);
     console.log(`Phase: ${isEndgame ? "Endgame" : "Middlegame/Opening"}`);
     return score;
 };
@@ -825,13 +827,16 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (Anti-Perpetual + Black Tables)`);
+    console.log(`Version: ${GAME_VERSION} (Smart Perpetual Check)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
     console.log(`Game over: ${gameOver}`);
     console.log(`Human plays: ${humanPlayer}`);
     console.log(`AI plays: ${aiPlayer}`);
+    
+    const material = getMaterialScore(board, currentPlayer);
+    console.log(`Material advantage: ${material > 0 ? '+' : ''}${material}`);
     
     if (moveTree) {
         const stats = moveTree.getStats();
@@ -865,7 +870,7 @@ window.clearMemory = function() {
     return "Memory cleared";
 };
 
-window.analyzeCapture = function(moveStr) {
+window.analyzeMove = function(moveStr) {
     const move = parseAlgebraicMove(moveStr);
     if (!move) {
         console.log("Invalid move format");
@@ -875,38 +880,38 @@ window.analyzeCapture = function(moveStr) {
     const boardState = board;
     const target = boardState[move.toRow][move.toCol];
     
-    if (!target) {
-        console.log("Not a capture move");
-        return;
+    console.log(`\n📊 Move Analysis for ${moveStr}:`);
+    
+    if (target) {
+        const safety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+        console.log(`  Capture safety score: ${safety}`);
     }
     
-    const safety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
     const wouldHang = wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
-    const checkQuality = evaluateCheckQuality(boardState, move, currentPlayer);
-    
-    console.log(`\n📊 Move Analysis for ${moveStr}:`);
-    console.log(`  Capture safety score: ${safety}`);
     console.log(`  Would hang a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
+    
+    const checkQuality = evaluateCheckQuality(boardState, move, currentPlayer);
     if (checkQuality !== 0) {
         console.log(`  Check quality: ${checkQuality > 0 ? '✅ Good' : '⚠️ Poor'} (${checkQuality})`);
     }
     
-    if (safety < 0) {
-        console.log(`  ⚠️ WARNING: This capture may be unfavorable!`);
-    } else if (safety > 0) {
-        console.log(`  ✅ This capture looks good!`);
+    const materialScore = getMaterialScore(boardState, currentPlayer);
+    console.log(`  Current material advantage: ${materialScore > 0 ? '+' : ''}${materialScore}`);
+    
+    if (materialScore < -200 && isPerpetualCheckOpportunity(boardState, currentPlayer)) {
+        console.log(`  💡 Perpetual check is a good drawing option here!`);
     }
     
-    return { safety, wouldHang, checkQuality };
+    return { wouldHang, checkQuality };
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.2                ║");
-    console.log("║       (Anti-Perpetual Check + Black Piece Tables)              ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.3.3                ║");
+    console.log("║        (Smart Perpetual Check - Only When Losing)              ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
-    console.log("  board()            - Show current board");
+    console.log("  board()            - Show current board with material");
     console.log("  setFEN('fen')      - Set position from FEN");
     console.log("  getFEN()           - Get current FEN");
     console.log("\n🎮 MOVES:");
@@ -919,17 +924,17 @@ window.help = function() {
     console.log("  setDepth(n)        - Set AI depth (1-6)");
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
-    console.log("\n🎯 TACTICAL ANALYSIS:");
-    console.log("  analyzeCapture('e4d5') - Check if a capture/check is safe");
+    console.log("\n🎯 ANALYSIS:");
+    console.log("  analyzeMove('e4d5') - Analyze move quality");
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory");
     console.log("  help()             - Show this help");
-    console.log("\n🆕 v2.3.2 Features:");
-    console.log("  • Anti-perpetual check - AI avoids endless checks");
-    console.log("  • Black piece-square tables - Better black play");
-    console.log("  • Check quality evaluation");
+    console.log("\n🆕 v2.3.3 Features:");
+    console.log("  • Perpetual check only when losing (smart draw!)");
+    console.log("  • Anti-blunder: better capture evaluation");
+    console.log("  • Material awareness in search");
     console.log("\n");
     return "Help displayed above";
 };
@@ -999,9 +1004,9 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Anti-Perpetual Check + Black Tables`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Smart Perpetual Check`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
-    console.log(`🎯 Features: No more endless checks! Black plays better!`);
+    console.log(`🎯 Perpetual check only when losing!`);
 
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
@@ -1009,7 +1014,6 @@ function displayVersion() {
     }
 }
 
-// Initialize on page load
 window.addEventListener('load', function() {
     moveTree = new PersistentMoveTree();
     
@@ -1036,7 +1040,6 @@ window.addEventListener('load', function() {
     displayVersion();
     
     console.log(`♔ Chess Game v${GAME_VERSION} Loaded! ♛`);
-    console.log(`🆕 AI now avoids endless checks and plays better as black!`);
     console.log(`💡 Type 'help()' in console to see all commands!`);
 });
 
@@ -1440,14 +1443,12 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
     moveHistory.push(algebraicMove);
     updateMoveHistory();
     
-    // Track position for repetition detection
     const posKey = getSimplePositionKey(board);
     positionHistory.push(posKey);
     if (positionHistory.length > 20) {
         positionHistory.shift();
     }
     
-    // Track checks
     const opponent = currentPlayer === 'white' ? 'black' : 'white';
     if (isKingInCheck(board, opponent)) {
         checkHistory.push({
@@ -1537,18 +1538,7 @@ function isStalemate() {
 }
 
 function isDraw() {
-    return halfMoveCount >= 100 || isInsufficientMaterial() || isThreefoldRepetition();
-}
-
-function isThreefoldRepetition() {
-    if (positionHistory.length < 9) return false;
-    
-    const lastPos = positionHistory[positionHistory.length - 1];
-    let count = 0;
-    for (const pos of positionHistory) {
-        if (pos === lastPos) count++;
-    }
-    return count >= 3;
+    return halfMoveCount >= 100 || isInsufficientMaterial();
 }
 
 function isInsufficientMaterial() {
@@ -1801,6 +1791,36 @@ function isEndgamePositionForPosition(boardState) {
     return pieceCount <= 10 || (pieceCount <= 12 && queenCount === 0);
 }
 
+function findKing(boardState, player) {
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row] && boardState[row][col] === kingSymbol) {
+                return { row, col };
+            }
+        }
+    }
+    return null;
+}
+
+function countPawnShield(boardState, kingPos, player) {
+    let shieldCount = 0;
+    const pawnSymbol = player === 'white' ? '♙' : '♟';
+    const direction = player === 'white' ? -1 : 1;
+    
+    for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
+        if (col >= 0 && col < 8) {
+            const shieldRow = kingPos.row + direction;
+            if (shieldRow >= 0 && shieldRow < 8) {
+                if (boardState[shieldRow][col] === pawnSymbol) {
+                    shieldCount++;
+                }
+            }
+        }
+    }
+    return shieldCount;
+}
+
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
@@ -1818,7 +1838,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Positional evaluation with dedicated black tables
+    // Positional evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1826,15 +1846,12 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
                 let tableValue = 0;
                 const pieceColor = isPlayerPieceForPosition(piece, 'white') ? 'white' : 'black';
                 
-                // Use endgame tables for kings in endgame
                 if (isEndgame && (piece === '♔' || piece === '♚') && ENDGAME_PIECE_SQUARE_TABLES[piece]) {
                     tableValue = ENDGAME_PIECE_SQUARE_TABLES[piece][row][col];
                 }
-                // Use dedicated black tables for black pieces
                 else if (pieceColor === 'black' && BLACK_PIECE_SQUARE_TABLES[piece]) {
                     tableValue = BLACK_PIECE_SQUARE_TABLES[piece][row][col];
                 }
-                // Use standard tables for white pieces
                 else if (PIECE_SQUARE_TABLES[piece]) {
                     tableValue = PIECE_SQUARE_TABLES[piece][row][col];
                 }
@@ -1844,7 +1861,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Center control bonus
+    // Center control
     const centerBonus = 25;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
@@ -1854,12 +1871,12 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Mobility evaluation
+    // Mobility
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 8;
 
-    // King safety in middlegame
+    // King safety
     if (!isEndgame) {
         const whiteKingPos = findKing(boardState, 'white');
         const blackKingPos = findKing(boardState, 'black');
@@ -1895,50 +1912,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Perpetual check penalty for the side giving repetitive checks
-    if (player === 'white') {
-        const whiteChecks = countConsecutiveChecks(boardState, 'white');
-        if (whiteChecks >= 3) {
-            evaluation -= 30 * (whiteChecks - 2);
-        }
-    } else {
-        const blackChecks = countConsecutiveChecks(boardState, 'black');
-        if (blackChecks >= 3) {
-            evaluation += 30 * (blackChecks - 2);
-        }
-    }
-
     return evaluation;
-}
-
-function findKing(boardState, player) {
-    const kingSymbol = player === 'white' ? '♔' : '♚';
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            if (boardState[row] && boardState[row][col] === kingSymbol) {
-                return { row, col };
-            }
-        }
-    }
-    return null;
-}
-
-function countPawnShield(boardState, kingPos, player) {
-    let shieldCount = 0;
-    const pawnSymbol = player === 'white' ? '♙' : '♟';
-    const direction = player === 'white' ? -1 : 1;
-    
-    for (let col = kingPos.col - 1; col <= kingPos.col + 1; col++) {
-        if (col >= 0 && col < 8) {
-            const shieldRow = kingPos.row + direction;
-            if (shieldRow >= 0 && shieldRow < 8) {
-                if (boardState[shieldRow][col] === pawnSymbol) {
-                    shieldCount++;
-                }
-            }
-        }
-    }
-    return shieldCount;
 }
 
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
@@ -1967,7 +1941,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
-    // Sort moves - captures first, then by tactical safety
     moves.sort((a, b) => {
         const targetA = boardState[a.toRow][a.toCol];
         const targetB = boardState[b.toRow][b.toCol];
@@ -1986,26 +1959,20 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of moves) {
-            // Skip obviously bad captures
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
-                if (captureSafety < -100) {
+                if (captureSafety < -150) {
                     continue;
                 }
             }
             
-            // Skip perpetual checks
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            if (isPerpetualCheck(newBoard, player)) {
-                continue;
-            }
             
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, false, nextPlayer, moveNumber + 1, trackWorstCase);
             
             let evalValue = typeof evaluation === 'object' ? evaluation.best : evaluation;
             
-            // Apply tactical penalties/rewards
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
                 evalValue += captureSafety;
@@ -2015,7 +1982,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
                 evalValue -= 80;
             }
             
-            // Evaluate check quality
             const checkQuality = evaluateCheckQuality(boardState, move, player);
             evalValue += checkQuality;
             
@@ -2039,17 +2005,12 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
-                if (captureSafety < -100) {
+                if (captureSafety < -150) {
                     continue;
                 }
             }
             
             const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            
-            // Skip perpetual checks
-            if (isPerpetualCheck(newBoard, player)) {
-                continue;
-            }
             
             const evaluation = minimaxWithRisk(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1, trackWorstCase);
             
@@ -2064,7 +2025,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
                 evalValue += 80;
             }
             
-            // Evaluate check quality
             const checkQuality = evaluateCheckQuality(boardState, move, player);
             evalValue -= checkQuality;
             
@@ -2100,7 +2060,8 @@ function findBestMoveWithRiskAssessment() {
     const isEndgame = isEndgamePositionForPosition(board);
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth}`);
+    const materialScore = getMaterialScore(board, currentPlayer);
+    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth} (material: ${materialScore > 0 ? '+' : ''}${materialScore})`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
@@ -2121,11 +2082,6 @@ function findBestMoveWithRiskAssessment() {
         } else {
             const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
             
-            // Skip moves that lead to perpetual check
-            if (isPerpetualCheck(newBoard, currentPlayer)) {
-                continue;
-            }
-            
             const bestResult = minimaxWithRisk(newBoard, searchDepth - 1, -Infinity, Infinity, false, 
                 currentPlayer === 'white' ? 'black' : 'white', moveCount + 1, false);
             
@@ -2135,7 +2091,6 @@ function findBestMoveWithRiskAssessment() {
             const worstCase = typeof worstResult === 'object' ? worstResult.best : worstResult;
             let bestCase = typeof bestResult === 'object' ? bestResult.best : bestResult;
             
-            // Apply tactical evaluation
             const targetPiece = board[move.toRow][move.toCol];
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
@@ -2146,7 +2101,6 @@ function findBestMoveWithRiskAssessment() {
                 bestCase -= 80;
             }
             
-            // Check quality
             const checkQuality = evaluateCheckQuality(board, move, currentPlayer);
             bestCase += checkQuality;
             
@@ -2239,7 +2193,7 @@ function updateAIStats() {
     winRateElement.textContent = enhancedAI ? enhancedAI.getWinRate() : '65';
     
     if (difficultyElement) {
-        difficultyElement.textContent = 'PMTS v2.3.2 (Anti-Perpetual)';
+        difficultyElement.textContent = 'PMTS v2.3.3 (Smart Perpetual)';
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2299,7 +2253,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} - No more endless checks!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} - Smart Perpetual Check!`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2360,7 +2314,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (Tactical v2.3.2)';
+        gameModeDisplay.textContent = 'vs AI (Smart v2.3.3)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer === aiPlayer && !gameOver) {
@@ -2387,9 +2341,9 @@ function clearMemory() {
 if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
-    window.analyzeCapture = window.analyzeCapture;
+    window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - No more endless checks! Black plays better!`);
-console.log(`🆕 Features: Anti-perpetual check + Dedicated black piece-square tables`);
-console.log(`💡 Try: analyzeCapture('e4d5') to check move quality!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Smart Perpetual Check (only when losing)!`);
+console.log(`💡 AI will use perpetual check to draw when behind, avoid it when ahead!`);
+console.log(`💡 Try: analyzeMove('e4d5') to check move quality!`);

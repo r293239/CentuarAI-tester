@@ -291,7 +291,6 @@ const PIECE_SQUARE_TABLES = {
     ]
 };
 
-// Black piece-square tables (flipped)
 const BLACK_PIECE_SQUARE_TABLES = {
     '♟': [
         [0, 0, 0, 0, 0, 0, 0, 0],
@@ -355,7 +354,6 @@ const BLACK_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// Endgame piece-square tables
 const ENDGAME_PIECE_SQUARE_TABLES = {
     '♔': [
         [-50, -40, -30, -20, -20, -30, -40, -50],
@@ -645,7 +643,6 @@ window.eval = function() {
     console.log(`Position evaluation: ${score}`);
     console.log(`Phase: ${isEndgame ? "Endgame" : "Middlegame/Opening"}`);
     
-    // Show database stats if available
     if (patternLearner && patternLearner.loaded) {
         const stats = patternLearner.getStats();
         console.log(`📊 Pattern DB: ${stats.totalGames} games, ${stats.patterns} patterns learned`);
@@ -782,7 +779,6 @@ window.analyzeMove = function(moveStr) {
     const wouldHang = wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
     console.log(`  Would hang a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
     
-    // Get pattern learner advice if available
     if (patternLearner && patternLearner.loaded) {
         const advice = patternLearner.getTacticalAdvice(boardState, currentPlayer);
         if (advice && advice.length) {
@@ -912,7 +908,6 @@ window.addEventListener('load', function() {
         window.enPassantTarget = enPassantTarget;
     }
     
-    // Initialize opening book
     if (typeof ChessAILearner !== 'undefined') {
         enhancedAI = new ChessAILearner();
         openingBook = enhancedAI;
@@ -921,11 +916,9 @@ window.addEventListener('load', function() {
         console.log("⚠️ Opening book not found - using PMTS only");
     }
     
-    // Initialize pattern learner from CSV
     if (typeof GamePatternLearner !== 'undefined') {
         patternLearner = new GamePatternLearner();
         
-        // Try to load the CSV file
         fetch('games.csv')
             .then(response => {
                 if (!response.ok) throw new Error('CSV not found');
@@ -945,7 +938,6 @@ window.addEventListener('load', function() {
         console.log("⚠️ Pattern learner not found - using standard evaluation");
     }
     
-    // Try to load endgame engine
     if (typeof ChessEndgameEngine !== 'undefined') {
         endgameEngine = new ChessEndgameEngine();
         console.log(`♟️ Endgame Engine loaded!`);
@@ -1693,16 +1685,13 @@ function isEndgamePositionForPosition(boardState) {
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
-    // If pattern learner is available, use it for evaluation
     if (patternLearner && patternLearner.loaded) {
         return patternLearner.evaluatePosition(boardState, player);
     }
     
-    // Fallback to original evaluation
     let evaluation = 0;
     const isEndgame = isEndgamePositionForPosition(boardState);
 
-    // Material evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1713,7 +1702,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Positional evaluation
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1734,7 +1722,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Center control
     const centerBonus = 25;
     const centers = [[3,3], [3,4], [4,3], [4,4]];
     for (const [r,c] of centers) {
@@ -1744,7 +1731,6 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
         }
     }
 
-    // Mobility
     const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
     const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
     evaluation += (whiteMoves - blackMoves) * 5;
@@ -1869,7 +1855,6 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
-    // Try opening book first if available
     if (openingBook && moveHistory.length < 12) {
         const openingMoveAlgebraic = openingBook.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -2156,7 +2141,21 @@ function clearMemory() {
     }
 }
 
+// ========== EXPOSE FUNCTIONS GLOBALLY FOR HTML ONCLICK ==========
 if (typeof window !== 'undefined') {
+    window.newGame = newGame;
+    window.undoMove = undoMove;
+    window.switchSides = switchSides;
+    window.changeGameMode = changeGameMode;
+    window.setMode = function(mode) {
+        if (mode === 'ai' || mode === 'player') {
+            gameMode = mode;
+            const gameModeSelect = document.getElementById('gameMode');
+            if (gameModeSelect) gameModeSelect.value = mode;
+            changeGameMode();
+        }
+    };
+    
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
     window.analyzeMove = window.analyzeMove;

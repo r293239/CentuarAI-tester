@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.0 - Dual Database: Opening Book + Pattern Learner from games.csv
-// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.0)
+// VERSION: 2.4.1 - Fixed Endless Checks + Checkmate Knowledge + Database Learning
+// COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
-const GAME_VERSION = "2.4.0";
+const GAME_VERSION = "2.4.1";
 
 // ========== GAME DATABASES ==========
 let openingBook = null;        // From chess-ai-database.js (opening moves)
@@ -377,6 +377,157 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
+// ========== ENDGAME CHECK PREVENTION ==========
+
+function isEndlessCheck(moveHistory, player) {
+    if (moveHistory.length < 6) return false;
+    
+    let consecutiveChecks = 0;
+    let checksByPlayer = 0;
+    
+    for (let i = moveHistory.length - 1; i >= 0 && i >= moveHistory.length - 10; i--) {
+        const move = moveHistory[i];
+        if (move && (move.includes('+') || move.includes('#'))) {
+            consecutiveChecks++;
+            const moveIndex = i;
+            const isPlayerMove = (moveIndex % 2 === 0 && player === 'white') || 
+                               (moveIndex % 2 === 1 && player === 'black');
+            if (isPlayerMove) checksByPlayer++;
+        } else {
+            break;
+        }
+    }
+    
+    return consecutiveChecks >= 3 && checksByPlayer >= 3;
+}
+
+function getEndgameCheckPenalty(boardState, player, moveHistory) {
+    const isEndgame = isEndgamePositionForPosition(boardState);
+    if (!isEndgame) return 0;
+    
+    if (isEndlessCheck(moveHistory, player)) {
+        return -250;
+    }
+    
+    let recentChecks = 0;
+    for (let i = moveHistory.length - 1; i >= 0 && i >= moveHistory.length - 6; i--) {
+        if (moveHistory[i] && (moveHistory[i].includes('+') || moveHistory[i].includes('#'))) {
+            recentChecks++;
+        }
+    }
+    
+    if (recentChecks >= 4) {
+        return -150;
+    } else if (recentChecks >= 3) {
+        return -80;
+    }
+    
+    return 0;
+}
+
+// ========== CHECKMATE KNOWLEDGE ==========
+
+function evaluateCheckmatePatterns(boardState, player) {
+    let mateScore = 0;
+    const opponent = player === 'white' ? 'black' : 'white';
+    const opponentKing = findKing(boardState, opponent);
+    
+    if (!opponentKing) return 0;
+    
+    // King in corner is easier to checkmate
+    const isKingInCorner = (opponentKing.row === 0 || opponentKing.row === 7) && 
+                           (opponentKing.col === 0 || opponentKing.col === 7);
+    if (isKingInCorner) {
+        mateScore += 30;
+    }
+    
+    // King on edge is good for attacking
+    const isKingOnEdge = opponentKing.row === 0 || opponentKing.row === 7 || 
+                         opponentKing.col === 0 || opponentKing.col === 7;
+    if (isKingOnEdge) {
+        mateScore += 15;
+    }
+    
+    // Count attacking pieces near enemy king
+    let attackersNearKing = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row] && boardState[row][col];
+            if (piece && isPlayerPieceForPosition(piece, player)) {
+                const distance = Math.abs(row - opponentKing.row) + Math.abs(col - opponentKing.col);
+                if (distance <= 3 && piece !== '♔' && piece !== '♚') {
+                    attackersNearKing++;
+                }
+            }
+        }
+    }
+    mateScore += attackersNearKing * 20;
+    
+    // Enemy king has no escape squares (checkmate pattern)
+    let escapeSquares = 0;
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const newRow = opponentKing.row + dr;
+            const newCol = opponentKing.col + dc;
+            if (newRow >= 0 && newRow < 8 && newCol >= 0 && newCol < 8) {
+                const targetPiece = boardState[newRow] && boardState[newRow][newCol];
+                if (!targetPiece || !isPlayerPieceForPosition(targetPiece, opponent)) {
+                    if (!isSquareAttackedForPosition(boardState, newRow, newCol, player)) {
+                        escapeSquares++;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fewer escape squares = closer to checkmate
+    if (escapeSquares === 0) {
+        mateScore += 100;
+    } else if (escapeSquares <= 2) {
+        mateScore += 50;
+    }
+    
+    // Bonus for having queen near enemy king (common checkmate pattern)
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row] && boardState[row][col];
+            if (piece && ((player === 'white' && piece === '♕') || (player === 'black' && piece === '♛'))) {
+                const distance = Math.abs(row - opponentKing.row) + Math.abs(col - opponentKing.col);
+                if (distance <= 2) {
+                    mateScore += 40;
+                }
+            }
+        }
+    }
+    
+    // Rook on the same file/rank as enemy king (back rank mate pattern)
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row] && boardState[row][col];
+            if (piece && ((player === 'white' && piece === '♖') || (player === 'black' && piece === '♜'))) {
+                if (row === opponentKing.row || col === opponentKing.col) {
+                    mateScore += 25;
+                }
+            }
+        }
+    }
+    
+    return mateScore;
+}
+
+function findKing(boardState, player) {
+    const kingSymbol = player === 'white' ? '♔' : '♚';
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if (boardState[row] && boardState[row][col] === kingSymbol) {
+                return { row, col };
+            }
+        }
+    }
+    return null;
+}
+
 // ========== SMART TACTICAL AWARENESS ==========
 
 function isPieceDefended(boardState, row, col, player) {
@@ -645,7 +796,7 @@ window.eval = function() {
     
     if (patternLearner && patternLearner.loaded) {
         const stats = patternLearner.getStats();
-        console.log(`📊 Pattern DB: ${stats.totalGames} games, ${stats.patterns} patterns learned`);
+        console.log(`📊 Pattern DB: ${stats.totalGames} games, ${stats.tacticalPatterns} patterns learned`);
     }
     
     return score;
@@ -702,7 +853,7 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (Dual Database)`);
+    console.log(`Version: ${GAME_VERSION} (Checkmate Knowledge + Anti-Endless Checks)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
@@ -730,7 +881,7 @@ window.stats = function() {
         console.log(`Black wins: ${pStats.blackWins} (${(pStats.blackWins/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Draws: ${pStats.draws} (${(pStats.draws/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Avg moves/game: ${pStats.avgMoves}`);
-        console.log(`Patterns learned: ${pStats.patterns}`);
+        console.log(`Patterns learned: ${pStats.tacticalPatterns}`);
     }
     
     return "Stats displayed above";
@@ -779,6 +930,9 @@ window.analyzeMove = function(moveStr) {
     const wouldHang = wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
     console.log(`  Would hang a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
     
+    const checkmateScore = evaluateCheckmatePatterns(boardState, currentPlayer);
+    console.log(`  Checkmate potential: ${checkmateScore}`);
+    
     if (patternLearner && patternLearner.loaded) {
         const advice = patternLearner.getTacticalAdvice(boardState, currentPlayer);
         if (advice && advice.length) {
@@ -787,13 +941,13 @@ window.analyzeMove = function(moveStr) {
         }
     }
     
-    return { wouldHang };
+    return { wouldHang, checkmateScore };
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.0                ║");
-    console.log("║          (Dual Database: Opening Book + Pattern Learner)       ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.1                ║");
+    console.log("║      (Checkmate Knowledge + Anti-Endless Checks + DB)          ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -810,15 +964,16 @@ window.help = function() {
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
     console.log("\n🎯 ANALYSIS:");
-    console.log("  analyzeMove('e4d5') - Analyze move quality");
+    console.log("  analyzeMove('e4d5') - Analyze move quality (incl. checkmate potential)");
     console.log("\n📊 GAME INFO:");
-    console.log("  stats()            - Show game statistics (including DB)");
+    console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory");
     console.log("  help()             - Show this help");
-    console.log("\n📚 DATABASES:");
-    console.log("  • Opening Book - Professional opening moves");
-    console.log("  • Pattern Learner - Learned from 20,000+ master games");
+    console.log("\n🆕 v2.4.1 Features:");
+    console.log("  • Checkmate pattern recognition");
+    console.log("  • Anti-endless check prevention");
+    console.log("  • Pattern database learning");
     console.log("\n");
     return "Help displayed above";
 };
@@ -888,7 +1043,7 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Dual Database: Opening Book + Pattern Learner`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Checkmate Knowledge + Anti-Endless Checks`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`📚 Pattern DB: ${patternLearner && patternLearner.loaded ? 'Loaded' : 'Not loaded'}`);
 
@@ -1685,56 +1840,68 @@ function isEndgamePositionForPosition(boardState) {
 function evaluatePositionForSearch(boardState, player, moveNumber) {
     if (!boardState) return 0;
     
-    if (patternLearner && patternLearner.loaded) {
-        return patternLearner.evaluatePosition(boardState, player);
-    }
-    
     let evaluation = 0;
     const isEndgame = isEndgamePositionForPosition(boardState);
 
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece) {
-                const value = PIECE_VALUES[piece] || 0;
-                evaluation += isPlayerPieceForPosition(piece, 'white') ? value : -value;
-            }
-        }
-    }
-
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row] && boardState[row][col];
-            if (piece) {
-                let tableValue = 0;
-                const pieceColor = isPlayerPieceForPosition(piece, 'white') ? 'white' : 'black';
-                
-                if (isEndgame && (piece === '♔' || piece === '♚') && ENDGAME_PIECE_SQUARE_TABLES[piece]) {
-                    tableValue = ENDGAME_PIECE_SQUARE_TABLES[piece][row][col];
-                } else if (pieceColor === 'black' && BLACK_PIECE_SQUARE_TABLES[piece]) {
-                    tableValue = BLACK_PIECE_SQUARE_TABLES[piece][row][col];
-                } else if (PIECE_SQUARE_TABLES[piece]) {
-                    tableValue = PIECE_SQUARE_TABLES[piece][row][col];
+    // Use pattern learner if available
+    if (patternLearner && patternLearner.loaded) {
+        evaluation = patternLearner.evaluatePosition(boardState, player);
+    } else {
+        // Material evaluation
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece) {
+                    const value = PIECE_VALUES[piece] || 0;
+                    evaluation += isPlayerPieceForPosition(piece, 'white') ? value : -value;
                 }
-                
-                evaluation += pieceColor === 'white' ? tableValue : -tableValue;
             }
         }
-    }
 
-    const centerBonus = 25;
-    const centers = [[3,3], [3,4], [4,3], [4,4]];
-    for (const [r,c] of centers) {
-        const piece = boardState[r] && boardState[r][c];
-        if (piece) {
-            evaluation += isPlayerPieceForPosition(piece, 'white') ? centerBonus : -centerBonus;
+        // Positional evaluation
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardState[row] && boardState[row][col];
+                if (piece) {
+                    let tableValue = 0;
+                    const pieceColor = isPlayerPieceForPosition(piece, 'white') ? 'white' : 'black';
+                    
+                    if (isEndgame && (piece === '♔' || piece === '♚') && ENDGAME_PIECE_SQUARE_TABLES[piece]) {
+                        tableValue = ENDGAME_PIECE_SQUARE_TABLES[piece][row][col];
+                    } else if (pieceColor === 'black' && BLACK_PIECE_SQUARE_TABLES[piece]) {
+                        tableValue = BLACK_PIECE_SQUARE_TABLES[piece][row][col];
+                    } else if (PIECE_SQUARE_TABLES[piece]) {
+                        tableValue = PIECE_SQUARE_TABLES[piece][row][col];
+                    }
+                    
+                    evaluation += pieceColor === 'white' ? tableValue : -tableValue;
+                }
+            }
         }
+
+        // Center control
+        const centerBonus = 25;
+        const centers = [[3,3], [3,4], [4,3], [4,4]];
+        for (const [r,c] of centers) {
+            const piece = boardState[r] && boardState[r][c];
+            if (piece) {
+                evaluation += isPlayerPieceForPosition(piece, 'white') ? centerBonus : -centerBonus;
+            }
+        }
+
+        // Mobility
+        const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
+        const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
+        evaluation += (whiteMoves - blackMoves) * 5;
     }
-
-    const whiteMoves = getAllPossibleMovesForPosition(boardState, 'white').length;
-    const blackMoves = getAllPossibleMovesForPosition(boardState, 'black').length;
-    evaluation += (whiteMoves - blackMoves) * 5;
-
+    
+    // Apply endgame check penalty
+    evaluation += getEndgameCheckPenalty(boardState, player, moveHistory);
+    
+    // Add checkmate pattern bonus (only for the player to move)
+    const mateBonus = evaluateCheckmatePatterns(boardState, player);
+    evaluation += mateBonus;
+    
     return evaluation;
 }
 
@@ -1855,6 +2022,7 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
+    // Try opening book first
     if (openingBook && moveHistory.length < 12) {
         const openingMoveAlgebraic = openingBook.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -1869,12 +2037,21 @@ function findBestMoveWithRiskAssessment() {
     const isEndgame = isEndgamePositionForPosition(board);
     const searchDepth = isEndgame ? SEARCH_CONFIG.endgameDepth : SEARCH_CONFIG.baseDepth;
     
-    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth}`);
+    console.log(`🔍 ${currentPlayer.toUpperCase()} AI searching at depth ${searchDepth}${isEndgame ? ' (endgame)' : ''}`);
     const searchStartTime = performance.now();
     
     const evaluatedMoves = [];
     
     for (const move of allMoves) {
+        // Skip endless check moves in endgame
+        if (isEndgame) {
+            const testHistory = [...moveHistory, toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)];
+            if (isEndlessCheck(testHistory, currentPlayer)) {
+                console.log(`  ⏭️ Skipping endless check move`);
+                continue;
+            }
+        }
+        
         let cachedResult = null;
         if (moveTree && SEARCH_CONFIG.useMemory) {
             cachedResult = moveTree.getCachedEvaluation(move, board, currentPlayer, castlingRights, enPassantTarget);
@@ -2004,7 +2181,7 @@ function updateAIStats() {
     winRateElement.textContent = winRate;
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.4.0 (Dual DB)`;
+        difficultyElement.textContent = `PMTS v2.4.1 (Checkmate Knowledge)`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2061,7 +2238,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Dual Database!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Checkmate Knowledge!`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2117,7 +2294,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (Dual DB v2.4.0)';
+        gameModeDisplay.textContent = 'vs AI (v2.4.1)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer === aiPlayer && !gameOver) {
@@ -2161,5 +2338,6 @@ if (typeof window !== 'undefined') {
     window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Dual Database: Opening Book + Pattern Learner!`);
-console.log(`📚 Type 'stats()' to see database statistics!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Checkmate Knowledge + Anti-Endless Checks!`);
+console.log(`🎯 AI now knows how to checkmate and avoids endless checks!`);
+console.log(`💡 Type 'help()' for all commands, 'analyzeMove(\"e4d5\")' for move analysis!`);

@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.2 - Full Console Commands + Checkmate Knowledge + Database Learning
+// VERSION: 2.4.1 - Fixed Endless Checks + Checkmate Knowledge + Database Learning
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
-const GAME_VERSION = "2.4.2";
+const GAME_VERSION = "2.4.1";
 
 // ========== GAME DATABASES ==========
 let openingBook = null;        // From chess-ai-database.js (opening moves)
@@ -434,18 +434,21 @@ function evaluateCheckmatePatterns(boardState, player) {
     
     if (!opponentKing) return 0;
     
+    // King in corner is easier to checkmate
     const isKingInCorner = (opponentKing.row === 0 || opponentKing.row === 7) && 
                            (opponentKing.col === 0 || opponentKing.col === 7);
     if (isKingInCorner) {
         mateScore += 30;
     }
     
+    // King on edge is good for attacking
     const isKingOnEdge = opponentKing.row === 0 || opponentKing.row === 7 || 
                          opponentKing.col === 0 || opponentKing.col === 7;
     if (isKingOnEdge) {
         mateScore += 15;
     }
     
+    // Count attacking pieces near enemy king
     let attackersNearKing = 0;
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
@@ -460,6 +463,7 @@ function evaluateCheckmatePatterns(boardState, player) {
     }
     mateScore += attackersNearKing * 20;
     
+    // Enemy king has no escape squares (checkmate pattern)
     let escapeSquares = 0;
     for (let dr = -1; dr <= 1; dr++) {
         for (let dc = -1; dc <= 1; dc++) {
@@ -477,12 +481,14 @@ function evaluateCheckmatePatterns(boardState, player) {
         }
     }
     
+    // Fewer escape squares = closer to checkmate
     if (escapeSquares === 0) {
         mateScore += 100;
     } else if (escapeSquares <= 2) {
         mateScore += 50;
     }
     
+    // Bonus for having queen near enemy king (common checkmate pattern)
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -495,6 +501,7 @@ function evaluateCheckmatePatterns(boardState, player) {
         }
     }
     
+    // Rook on the same file/rank as enemy king (back rank mate pattern)
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -603,9 +610,8 @@ function wouldHangPiece(boardState, fromRow, fromCol, toRow, toCol, player) {
     return false;
 }
 
-// ========== CONSOLE COMMANDS WITH PROPER LOGIC ==========
+// ========== CONSOLE COMMANDS ==========
 
-// Display the current board
 window.displayBoard = function() {
     console.log("\n  a b c d e f g h");
     for (let row = 0; row < 8; row++) {
@@ -617,30 +623,13 @@ window.displayBoard = function() {
         console.log(line);
     }
     console.log(`\nCurrent player: ${currentPlayer}`);
-    console.log(`Move: ${moveCount} | Half-move clock: ${halfMoveCount}`);
     console.log(`Game over: ${gameOver}`);
-    
-    // Show material count
-    let whiteMaterial = 0, blackMaterial = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece) {
-                const val = PIECE_VALUES[piece] || 0;
-                if ('♔♕♖♗♘♙'.includes(piece)) whiteMaterial += val;
-                else if ('♚♛♜♝♞♟'.includes(piece)) blackMaterial += val;
-            }
-        }
-    }
-    console.log(`Material: White ${whiteMaterial} - Black ${blackMaterial} (${whiteMaterial - blackMaterial > 0 ? '+' : ''}${whiteMaterial - blackMaterial})`);
-    
     if (isKingInCheck(board, currentPlayer)) {
         console.log(`⚠️ ${currentPlayer} is in check!`);
     }
     return "Board displayed above";
 };
 
-// Set position from FEN string
 window.setFEN = function(fen) {
     try {
         const parts = fen.split(' ');
@@ -713,7 +702,6 @@ window.setFEN = function(fen) {
     }
 };
 
-// Get current position as FEN
 window.getFEN = function() {
     let fen = "";
     
@@ -756,23 +744,20 @@ window.getFEN = function() {
     
     fen += " " + halfMoveCount + " " + moveCount;
     
-    console.log("FEN:", fen);
     return fen;
 };
 
-// Setup test position
+window.fen = window.getFEN;
+window.board = window.displayBoard;
+
 window.setup = function(positionName) {
     const positions = {
         "start": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        "endgame": "8/8/8/3k4/8/8/3Q4/7K w - - 0 1",
-        "mate_in_1": "rnbqkbnr/pppp1ppp/8/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR b KQkq - 0 1",
-        "stalemate": "7k/8/8/8/8/8/6Q1/7K w - - 0 1",
-        "castling": "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1",
-        "en_passant": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"
+        "test": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     };
     
     if (positions[positionName]) {
-        console.log(`📌 Setting up ${positionName} position...`);
+        console.log(`Setting up ${positionName} position...`);
         return window.setFEN(positions[positionName]);
     } else {
         console.log(`Available positions: ${Object.keys(positions).join(", ")}`);
@@ -780,7 +765,6 @@ window.setup = function(positionName) {
     }
 };
 
-// Make a move using algebraic notation
 window.move = function(moveStr) {
     const move = parseAlgebraicMove(moveStr);
     if (move && isValidMove(move.fromRow, move.fromCol, move.toRow, move.toCol)) {
@@ -796,374 +780,201 @@ window.move = function(moveStr) {
     }
 };
 
-// Show all legal moves for current player
 window.legalMoves = function() {
     const moves = getAllPossibleMoves(currentPlayer);
     const algebraicMoves = moves.map(move => toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol));
-    
-    console.log(`\n📋 Legal moves for ${currentPlayer} (${moves.length} total):`);
-    
-    // Group moves by type
-    const captures = algebraicMoves.filter(m => {
-        const parsed = parseAlgebraicMove(m);
-        return board[parsed.toRow][parsed.toCol] !== '';
-    });
-    const checks = [];
-    const others = [];
-    
-    for (const m of algebraicMoves) {
-        const parsed = parseAlgebraicMove(m);
-        const newBoard = makeTestMoveForPosition(board, parsed.fromRow, parsed.fromCol, parsed.toRow, parsed.toCol);
-        const opponent = currentPlayer === 'white' ? 'black' : 'white';
-        if (isKingInCheckForPosition(newBoard, opponent)) {
-            checks.push(m);
-        } else if (!captures.includes(m)) {
-            others.push(m);
-        }
-    }
-    
-    if (captures.length > 0) {
-        console.log(`  🎯 Captures (${captures.length}):`, captures.join(' '));
-    }
-    if (checks.length > 0) {
-        console.log(`  ⚠️ Checks (${checks.length}):`, checks.join(' '));
-    }
-    if (others.length > 0) {
-        console.log(`  📍 Other moves (${others.length}):`, others.join(' '));
-    }
-    
+    console.log(`Legal moves for ${currentPlayer} (${moves.length} total):`);
+    algebraicMoves.forEach(move => console.log(`  ${move}`));
     return algebraicMoves;
 };
 
-// Evaluate current position
 window.eval = function() {
     const score = evaluatePositionForSearch(board, currentPlayer, moveCount);
     const isEndgame = isEndgamePositionForPosition(board);
-    const mateBonus = evaluateCheckmatePatterns(board, currentPlayer);
-    
-    console.log(`\n📊 Position Evaluation:`);
-    console.log(`  Score: ${score > 0 ? '+' : ''}${score}`);
-    console.log(`  Phase: ${isEndgame ? "Endgame" : "Middlegame/Opening"}`);
-    console.log(`  Checkmate potential: ${mateBonus}`);
-    
-    // Material breakdown
-    let whiteMaterial = 0, blackMaterial = 0;
-    let whitePieces = [], blackPieces = [];
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece) {
-                const val = PIECE_VALUES[piece] || 0;
-                if ('♔♕♖♗♘♙'.includes(piece)) {
-                    whiteMaterial += val;
-                    whitePieces.push(piece);
-                } else if ('♚♛♜♝♞♟'.includes(piece)) {
-                    blackMaterial += val;
-                    blackPieces.push(piece);
-                }
-            }
-        }
-    }
-    console.log(`  Material: White ${whiteMaterial} - Black ${blackMaterial} (${whiteMaterial - blackMaterial > 0 ? '+' : ''}${whiteMaterial - blackMaterial})`);
-    
-    // Mobility
-    const whiteMoves = getAllPossibleMovesForPosition(board, 'white').length;
-    const blackMoves = getAllPossibleMovesForPosition(board, 'black').length;
-    console.log(`  Mobility: White ${whiteMoves} - Black ${blackMoves}`);
-    
-    // King safety
-    if (isKingInCheck(board, 'white')) console.log(`  ⚠️ White is in check!`);
-    if (isKingInCheck(board, 'black')) console.log(`  ⚠️ Black is in check!`);
+    console.log(`Position evaluation: ${score}`);
+    console.log(`Phase: ${isEndgame ? "Endgame" : "Middlegame/Opening"}`);
     
     if (patternLearner && patternLearner.loaded) {
         const stats = patternLearner.getStats();
-        console.log(`  📚 Pattern DB: ${stats.totalGames} games analyzed`);
+        console.log(`📊 Pattern DB: ${stats.totalGames} games, ${stats.tacticalPatterns} patterns learned`);
     }
     
     return score;
 };
 
-// Force AI to make a move
 window.ai = function() {
     if (gameMode !== 'ai') {
-        console.log("⚠️ Game mode is not AI. Use 'setMode ai' first.");
-        return false;
+        console.log("Game mode is not AI. Use 'setMode ai' first.");
+        return;
     }
     if (gameOver) {
-        console.log("⚠️ Game is over. Start a new game first.");
-        return false;
+        console.log("Game is over. Start a new game first.");
+        return;
     }
     if (currentPlayer === humanPlayer) {
-        console.log("⚠️ It's your turn! Make a move or use 'switchSide()' to switch sides.");
-        return false;
+        console.log("It's your turn! Make a move or switch sides.");
+        return;
     }
-    console.log("🤖 AI is thinking...");
+    console.log("AI is thinking...");
     makeAIMove();
     return "AI move initiated";
 };
 
-// Set AI search depth
 window.setDepth = function(depth) {
     if (depth >= 1 && depth <= 6) {
         SEARCH_CONFIG.baseDepth = depth;
         SEARCH_CONFIG.endgameDepth = depth + 2;
-        console.log(`✅ AI depth set to ${depth} (endgame depth: ${depth+2})`);
+        console.log(`AI depth set to ${depth} (endgame depth: ${depth+2})`);
         return `AI depth set to ${depth}`;
     } else {
-        console.log("❌ Depth must be between 1 and 6");
+        console.log("Depth must be between 1 and 6");
         return false;
     }
 };
 
-// Set game mode
 window.setMode = function(mode) {
     if (mode === 'ai' || mode === 'player') {
         gameMode = mode;
         const gameModeSelect = document.getElementById('gameMode');
         if (gameModeSelect) gameModeSelect.value = mode;
         changeGameMode();
-        console.log(`✅ Game mode set to ${mode === 'ai' ? 'vs AI' : 'vs Player'}`);
+        console.log(`Game mode set to ${mode === 'ai' ? 'vs AI' : 'vs Player'}`);
         return `Game mode set to ${mode}`;
     } else {
-        console.log("❌ Invalid mode. Use 'ai' or 'player'");
+        console.log("Invalid mode. Use 'ai' or 'player'");
         return false;
     }
 };
 
-// Switch sides
 window.switchSide = function() {
     switchSides();
-    console.log(`🔄 Switched sides. Human now plays ${humanPlayer}, AI plays ${aiPlayer}`);
-    return `Human: ${humanPlayer}, AI: ${aiPlayer}`;
+    return `Switched sides. Human now plays ${humanPlayer}`;
 };
 
-// Show game statistics
 window.stats = function() {
-    console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║                    GAME STATISTICS                             ║");
-    console.log("╚═══════════════════════════════════════════════════════════════╝");
-    console.log(`\n📌 GENERAL:`);
-    console.log(`  Version: ${GAME_VERSION}`);
-    console.log(`  Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
-    console.log(`  Current player: ${currentPlayer}`);
-    console.log(`  Move number: ${moveCount}`);
-    console.log(`  Half-move clock: ${halfMoveCount}/100`);
-    console.log(`  Game over: ${gameOver}`);
-    console.log(`  Human plays: ${humanPlayer}`);
-    console.log(`  AI plays: ${aiPlayer}`);
+    console.log("\n=== GAME STATISTICS ===");
+    console.log(`Version: ${GAME_VERSION} (Checkmate Knowledge + Anti-Endless Checks)`);
+    console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
+    console.log(`Current player: ${currentPlayer}`);
+    console.log(`Move number: ${moveCount}`);
+    console.log(`Game over: ${gameOver}`);
+    console.log(`Human plays: ${humanPlayer}`);
+    console.log(`AI plays: ${aiPlayer}`);
     
-    console.log(`\n🧠 AI MEMORY:`);
     if (moveTree) {
         const stats = moveTree.getStats();
-        console.log(`  Cached moves: ${stats.totalMoves}`);
-        console.log(`  Cached positions: ${stats.cachedPositions}`);
-        console.log(`  Search depth: ${SEARCH_CONFIG.baseDepth} (endgame: ${SEARCH_CONFIG.endgameDepth})`);
-    } else {
-        console.log(`  Memory not initialized`);
+        console.log(`\n=== AI MEMORY STATS ===`);
+        console.log(`Total cached moves: ${stats.totalMoves}`);
+        console.log(`Cached positions: ${stats.cachedPositions}`);
     }
     
-    console.log(`\n📖 OPENING BOOK:`);
     if (openingBook) {
-        console.log(`  Status: Loaded`);
-        console.log(`  Positions: ${openingBook.getBookSize ? openingBook.getBookSize() : 'N/A'}`);
-    } else {
-        console.log(`  Status: Not loaded`);
+        console.log(`\n=== OPENING BOOK ===`);
+        console.log(`Status: Loaded`);
     }
     
-    console.log(`\n📚 PATTERN LEARNER:`);
     if (patternLearner && patternLearner.loaded) {
         const pStats = patternLearner.getStats();
-        console.log(`  Status: Loaded`);
-        console.log(`  Games analyzed: ${pStats.totalGames}`);
-        console.log(`  High-quality games (1800+): ${pStats.highQualityGames || 0}`);
-        console.log(`  White wins: ${pStats.whiteWins} (${(pStats.whiteWins/pStats.totalGames*100).toFixed(1)}%)`);
-        console.log(`  Black wins: ${pStats.blackWins} (${(pStats.blackWins/pStats.totalGames*100).toFixed(1)}%)`);
-        console.log(`  Draws: ${pStats.draws} (${(pStats.draws/pStats.totalGames*100).toFixed(1)}%)`);
-        console.log(`  Avg moves/game: ${pStats.avgMoves}`);
-        console.log(`  Tactical patterns: ${pStats.tacticalPatterns || 0}`);
-    } else {
-        console.log(`  Status: Not loaded`);
+        console.log(`\n=== PATTERN LEARNER ===`);
+        console.log(`Games analyzed: ${pStats.totalGames}`);
+        console.log(`White wins: ${pStats.whiteWins} (${(pStats.whiteWins/pStats.totalGames*100).toFixed(1)}%)`);
+        console.log(`Black wins: ${pStats.blackWins} (${(pStats.blackWins/pStats.totalGames*100).toFixed(1)}%)`);
+        console.log(`Draws: ${pStats.draws} (${(pStats.draws/pStats.totalGames*100).toFixed(1)}%)`);
+        console.log(`Avg moves/game: ${pStats.avgMoves}`);
+        console.log(`Patterns learned: ${pStats.tacticalPatterns}`);
     }
-    
-    console.log(`\n🎯 POSITION:`);
-    const whiteMaterial = getMaterialCount('white');
-    const blackMaterial = getMaterialCount('black');
-    console.log(`  White material: ${whiteMaterial.total}`);
-    console.log(`  Black material: ${blackMaterial.total}`);
-    console.log(`  Advantage: ${whiteMaterial.total - blackMaterial.total > 0 ? 'White' : 'Black'} +${Math.abs(whiteMaterial.total - blackMaterial.total)}`);
     
     return "Stats displayed above";
 };
 
-// Undo last move
 window.undo = function() {
     if (gameHistory.length === 0) {
-        console.log("❌ No moves to undo");
-        return false;
+        console.log("No moves to undo");
+        return;
     }
     undoMove();
-    console.log("✅ Move undone");
+    console.log("Move undone");
     window.displayBoard();
     return "Move undone";
 };
 
-// Start new game
 window.newGame = function() {
     newGame();
-    console.log("✅ New game started");
+    console.log("New game started");
     window.displayBoard();
     return "New game started";
 };
 
-// Clear AI memory
 window.clearMemory = function() {
-    if (confirm('Clear AI memory? This will delete all cached calculations.')) {
-        if (moveTree) {
-            moveTree.clear();
-        }
-        transpositionTable.clear();
-        console.log("🧹 Memory cleared!");
-        updateAIStats();
-        return "Memory cleared";
-    }
-    return "Clear cancelled";
+    clearMemory();
+    return "Memory cleared";
 };
 
-// Analyze a specific move
 window.analyzeMove = function(moveStr) {
     const move = parseAlgebraicMove(moveStr);
     if (!move) {
-        console.log("❌ Invalid move format. Use format like 'e2e4'");
-        return false;
-    }
-    
-    if (!isValidMove(move.fromRow, move.fromCol, move.toRow, move.toCol)) {
-        console.log("❌ Illegal move");
-        return false;
+        console.log("Invalid move format");
+        return;
     }
     
     const boardState = board;
     const target = boardState[move.toRow][move.toCol];
-    const piece = boardState[move.fromRow][move.fromCol];
     
-    console.log(`\n╔═══════════════════════════════════════════════════════════════╗`);
-    console.log(`║                    MOVE ANALYSIS: ${moveStr}                        ║`);
-    console.log(`╚═══════════════════════════════════════════════════════════════╝`);
-    
-    console.log(`\n📌 BASIC INFO:`);
-    console.log(`  Piece: ${piece}`);
-    console.log(`  From: ${String.fromCharCode(97 + move.fromCol)}${8 - move.fromRow} → To: ${String.fromCharCode(97 + move.toCol)}${8 - move.toRow}`);
-    console.log(`  Type: ${target ? 'Capture' : 'Normal move'}`);
+    console.log(`\n📊 Move Analysis for ${moveStr}:`);
     
     if (target) {
-        console.log(`  Capturing: ${target} (value: ${PIECE_VALUES[target]})`);
         const safety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
-        console.log(`  Capture safety: ${safety > 0 ? '✅ Good' : safety < -50 ? '⚠️ Risky' : '📊 Neutral'} (score: ${safety})`);
+        console.log(`  Capture safety score: ${safety}`);
     }
     
     const wouldHang = wouldHangPiece(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
-    console.log(`  Hangs a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
+    console.log(`  Would hang a piece: ${wouldHang ? '⚠️ YES' : '✅ No'}`);
     
-    const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
-    const opponent = currentPlayer === 'white' ? 'black' : 'white';
-    const givesCheck = isKingInCheckForPosition(newBoard, opponent);
-    console.log(`  Gives check: ${givesCheck ? '⚠️ YES' : 'No'}`);
-    
-    console.log(`\n🎯 TACTICAL ANALYSIS:`);
-    const mateScore = evaluateCheckmatePatterns(newBoard, opponent);
-    console.log(`  Checkmate potential: ${mateScore > 50 ? '🔥 High' : mateScore > 20 ? '📈 Medium' : '📉 Low'} (${mateScore})`);
-    
-    // Check if move is part of endless check pattern
-    const testHistory = [...moveHistory, moveStr];
-    if (isEndlessCheck(testHistory, currentPlayer)) {
-        console.log(`  ⚠️ WARNING: This continues an endless check pattern!`);
-    }
-    
-    console.log(`\n📊 POSITION AFTER MOVE:`);
-    const evalBefore = evaluatePositionForSearch(boardState, currentPlayer, moveCount);
-    const evalAfter = evaluatePositionForSearch(newBoard, opponent, moveCount + 1);
-    console.log(`  Evaluation before: ${evalBefore > 0 ? '+' : ''}${evalBefore}`);
-    console.log(`  Evaluation after: ${evalAfter > 0 ? '+' : ''}${evalAfter}`);
-    console.log(`  Net change: ${evalAfter - evalBefore > 0 ? '+' : ''}${evalAfter - evalBefore}`);
+    const checkmateScore = evaluateCheckmatePatterns(boardState, currentPlayer);
+    console.log(`  Checkmate potential: ${checkmateScore}`);
     
     if (patternLearner && patternLearner.loaded) {
         const advice = patternLearner.getTacticalAdvice(boardState, currentPlayer);
         if (advice && advice.length) {
-            console.log(`\n📚 PATTERN DB ADVICE:`);
-            advice.forEach(a => console.log(`  • ${a}`));
+            console.log(`\n  📚 Pattern DB Advice:`);
+            advice.forEach(a => console.log(`    • ${a}`));
         }
     }
     
-    return { 
-        piece, 
-        isCapture: !!target, 
-        givesCheck, 
-        wouldHang, 
-        matePotential: mateScore,
-        evalChange: evalAfter - evalBefore 
-    };
+    return { wouldHang, checkmateScore };
 };
 
-// Test if current player is in check
-window.isCheck = function() {
-    const inCheck = isKingInCheck(board, currentPlayer);
-    console.log(`${currentPlayer} is ${inCheck ? '' : 'not '}in check`);
-    return inCheck;
-};
-
-// Test if position is checkmate
-window.isCheckmate = function() {
-    const result = isCheckmate();
-    console.log(`Position is ${result ? '' : 'not '}checkmate`);
-    return result;
-};
-
-// Test if position is stalemate
-window.isStalemate = function() {
-    const result = isStalemate();
-    console.log(`Position is ${result ? '' : 'not '}stalemate`);
-    return result;
-};
-
-// Show help
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.2                ║");
-    console.log("║      (Full Console Support + Checkmate Knowledge)              ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.1                ║");
+    console.log("║      (Checkmate Knowledge + Anti-Endless Checks + DB)          ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
-    console.log("  board()            - Show current board with material count");
-    console.log("  setFEN('fen')      - Set position from FEN string");
-    console.log("  getFEN()           - Get current position as FEN");
-    console.log("  setup('name')      - Setup test position (start, endgame, mate_in_1, etc.)");
+    console.log("  board()            - Show current board");
+    console.log("  setFEN('fen')      - Set position from FEN");
+    console.log("  getFEN()           - Get current FEN");
     console.log("\n🎮 MOVES:");
-    console.log("  move('e2e4')       - Make a move using algebraic notation");
-    console.log("  legalMoves()       - Show all legal moves (grouped by type)");
+    console.log("  move('e2e4')       - Make a move");
+    console.log("  legalMoves()       - Show all legal moves");
     console.log("  undo()             - Undo last move");
     console.log("\n🤖 AI & EVALUATION:");
-    console.log("  eval()             - Detailed position evaluation");
-    console.log("  ai()               - Force AI to make a move");
-    console.log("  setDepth(n)        - Set AI search depth (1-6)");
+    console.log("  eval()             - Evaluate position");
+    console.log("  ai()               - Force AI move");
+    console.log("  setDepth(n)        - Set AI depth (1-6)");
     console.log("  setMode('ai/player') - Switch game mode");
-    console.log("  switchSide()       - Switch which side human plays");
+    console.log("  switchSide()       - Switch sides");
     console.log("\n🎯 ANALYSIS:");
-    console.log("  analyzeMove('e4d5') - Full move analysis (captures, checks, mate potential)");
-    console.log("  isCheck()          - Test if current player is in check");
-    console.log("  isCheckmate()      - Test if position is checkmate");
-    console.log("  isStalemate()      - Test if position is stalemate");
+    console.log("  analyzeMove('e4d5') - Analyze move quality (incl. checkmate potential)");
     console.log("\n📊 GAME INFO:");
-    console.log("  stats()            - Show comprehensive game statistics");
-    console.log("  newGame()          - Start a new game");
-    console.log("  clearMemory()      - Clear AI memory cache");
-    console.log("  help()             - Show this help message");
-    console.log("\n🆕 v2.4.2 Features:");
-    console.log("  • Full console command logic");
-    console.log("  • Detailed move analysis");
-    console.log("  • Material and mobility evaluation");
+    console.log("  stats()            - Show game statistics");
+    console.log("  newGame()          - Start new game");
+    console.log("  clearMemory()      - Clear AI memory");
+    console.log("  help()             - Show this help");
+    console.log("\n🆕 v2.4.1 Features:");
     console.log("  • Checkmate pattern recognition");
     console.log("  • Anti-endless check prevention");
-    console.log("\n💡 Example: setup('mate_in_1') then legalMoves() to see winning moves!");
-    console.log("");
+    console.log("  • Pattern database learning");
+    console.log("\n");
     return "Help displayed above";
 };
 
@@ -1183,27 +994,6 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
     const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
     return files[fromCol] + ranks[fromRow] + files[toCol] + ranks[toRow];
-}
-
-function getMaterialCount(player) {
-    let queen = 0, rooks = 0, bishops = 0, knights = 0, pawns = 0;
-    const pieceSymbols = player === 'white' 
-        ? { queen: '♕', rook: '♖', bishop: '♗', knight: '♘', pawn: '♙' }
-        : { queen: '♛', rook: '♜', bishop: '♝', knight: '♞', pawn: '♟' };
-    
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = board[row][col];
-            if (piece === pieceSymbols.queen) queen++;
-            else if (piece === pieceSymbols.rook) rooks++;
-            else if (piece === pieceSymbols.bishop) bishops++;
-            else if (piece === pieceSymbols.knight) knights++;
-            else if (piece === pieceSymbols.pawn) pawns++;
-        }
-    }
-    
-    const total = queen * 900 + rooks * 500 + bishops * 330 + knights * 320 + pawns * 100;
-    return { queen, rooks, bishops, knights, pawns, total };
 }
 
 // ========== RISK ASSESSMENT CLASS ==========
@@ -1253,7 +1043,7 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Full Console Support + Checkmate Knowledge`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Checkmate Knowledge + Anti-Endless Checks`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`📚 Pattern DB: ${patternLearner && patternLearner.loaded ? 'Loaded' : 'Not loaded'}`);
 
@@ -2108,7 +1898,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     // Apply endgame check penalty
     evaluation += getEndgameCheckPenalty(boardState, player, moveHistory);
     
-    // Add checkmate pattern bonus
+    // Add checkmate pattern bonus (only for the player to move)
     const mateBonus = evaluateCheckmatePatterns(boardState, player);
     evaluation += mateBonus;
     
@@ -2232,6 +2022,7 @@ function findBestMoveWithRiskAssessment() {
     const allMoves = getAllPossibleMoves(currentPlayer);
     if (allMoves.length === 0) return null;
     
+    // Try opening book first
     if (openingBook && moveHistory.length < 12) {
         const openingMoveAlgebraic = openingBook.getOpeningRecommendation(moveHistory);
         if (openingMoveAlgebraic) {
@@ -2252,9 +2043,11 @@ function findBestMoveWithRiskAssessment() {
     const evaluatedMoves = [];
     
     for (const move of allMoves) {
+        // Skip endless check moves in endgame
         if (isEndgame) {
             const testHistory = [...moveHistory, toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)];
             if (isEndlessCheck(testHistory, currentPlayer)) {
+                console.log(`  ⏭️ Skipping endless check move`);
                 continue;
             }
         }
@@ -2388,7 +2181,7 @@ function updateAIStats() {
     winRateElement.textContent = winRate;
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.4.2 (Full Console)`;
+        difficultyElement.textContent = `PMTS v2.4.1 (Checkmate Knowledge)`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2445,7 +2238,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Full Console Support!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Checkmate Knowledge!`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2501,7 +2294,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (v2.4.2)';
+        gameModeDisplay.textContent = 'vs AI (v2.4.1)';
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer === aiPlayer && !gameOver) {
@@ -2543,11 +2336,8 @@ if (typeof window !== 'undefined') {
     window.clearAIMemory = clearMemory;
     window.getAIMemoryStats = () => moveTree ? moveTree.getStats() : { totalMoves: 0 };
     window.analyzeMove = window.analyzeMove;
-    window.isCheck = window.isCheck;
-    window.isCheckmate = window.isCheckmate;
-    window.isStalemate = window.isStalemate;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Full Console Support + Checkmate Knowledge!`);
-console.log(`💡 Type 'help()' in console to see all available commands!`);
-console.log(`🎮 Try: setup('mate_in_1') then legalMoves() to see winning moves!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Checkmate Knowledge + Anti-Endless Checks!`);
+console.log(`🎯 AI now knows how to checkmate and avoids endless checks!`);
+console.log(`💡 Type 'help()' for all commands, 'analyzeMove(\"e4d5\")' for move analysis!`);

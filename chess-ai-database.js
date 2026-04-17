@@ -16,7 +16,7 @@ class ChessAILearner {
             totalGames: 0
         };
         
-        console.log(`🧠 Chess AI v${this.version} loaded`);
+        console.log(`🧠 Chess AI Book v${this.version} loaded`);
     }
 
     initializeOpeningBook() {

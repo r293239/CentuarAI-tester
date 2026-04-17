@@ -4,7 +4,7 @@
 
 class ChessAILearner {
     constructor() {
-        this.version = "2.0";
+        this.version = "2.1";
         this.performanceHistory = [];
         this.openingBook = this.initializeOpeningBook();
         this.positionEvaluations = new Map();

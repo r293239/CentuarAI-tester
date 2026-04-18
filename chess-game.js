@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.2 - Quiescence Search + Null Move Pruning + PVS + Zobrist Transposition Table
+// VERSION: 2.4.3 - Fixed -
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
-const GAME_VERSION = "2.4.2";
+const GAME_VERSION = "2.4.3";
 
 // ========== GAME DATABASES ==========
 let openingBook = null;        // From chess-ai-database.js (opening moves)
@@ -43,7 +43,7 @@ class ZobristHasher {
     }
     
     hash(board, player, castlingRights, enPassantTarget) {
-        let hash = BigInt(0);
+        let hash = 0;
         
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
@@ -51,19 +51,19 @@ class ZobristHasher {
                 if (piece) {
                     const sq = row * 8 + col;
                     const key = this.pieceKeys.get(piece)?.[sq] || 0;
-                    hash ^= BigInt(key);
+                    hash ^= key;
                 }
             }
         }
         
-        if (player === 'white') hash ^= BigInt(this.sideKey);
-        if (castlingRights.whiteKingside) hash ^= BigInt(this.castlingKeys.get('whiteKingside'));
-        if (castlingRights.whiteQueenside) hash ^= BigInt(this.castlingKeys.get('whiteQueenside'));
-        if (castlingRights.blackKingside) hash ^= BigInt(this.castlingKeys.get('blackKingside'));
-        if (castlingRights.blackQueenside) hash ^= BigInt(this.castlingKeys.get('blackQueenside'));
+        if (player === 'white') hash ^= this.sideKey;
+        if (castlingRights.whiteKingside) hash ^= this.castlingKeys.get('whiteKingside');
+        if (castlingRights.whiteQueenside) hash ^= this.castlingKeys.get('whiteQueenside');
+        if (castlingRights.blackKingside) hash ^= this.castlingKeys.get('blackKingside');
+        if (castlingRights.blackQueenside) hash ^= this.castlingKeys.get('blackQueenside');
         
         if (enPassantTarget) {
-            hash ^= BigInt(this.enPassantKeys[enPassantTarget.col]);
+            hash ^= this.enPassantKeys[enPassantTarget.col];
         }
         
         return hash;
@@ -74,38 +74,42 @@ const zobrist = new ZobristHasher();
 
 // ========== TRANSPOSITION TABLE ==========
 class TranspositionTable {
-    constructor(maxSize = 100000) {
+    constructor(maxSize = 50000) {
         this.table = new Map();
         this.maxSize = maxSize;
     }
     
-    store(hash, depth, evaluation, flag, bestMove, age = 0) {
+    store(hash, depth, evaluation, flag, bestMove) {
         if (this.table.size >= this.maxSize) {
             const oldestKey = this.table.keys().next().value;
             this.table.delete(oldestKey);
         }
         
-        this.table.set(String(hash), {
-            hash,
+        // Never store invalid evaluations
+        if (!isFinite(evaluation) || isNaN(evaluation)) {
+            return;
+        }
+        
+        this.table.set(hash, {
             depth,
             evaluation,
-            flag, // 0: exact, 1: lower bound, 2: upper bound
-            bestMove,
-            age,
-            timestamp: Date.now()
+            flag,
+            bestMove
         });
     }
     
     probe(hash, depth, alpha, beta) {
-        const entry = this.table.get(String(hash));
+        const entry = this.table.get(hash);
         if (!entry) return null;
         
         if (entry.depth >= depth) {
-            if (entry.flag === 0) { // Exact
-                return { evaluation: entry.evaluation, bestMove: entry.bestMove };
-            } else if (entry.flag === 1 && entry.evaluation <= alpha) { // Lower bound
+            const evalScore = entry.evaluation;
+            
+            if (entry.flag === 0) {
+                return { evaluation: evalScore, bestMove: entry.bestMove };
+            } else if (entry.flag === 1 && evalScore <= alpha) {
                 return { evaluation: alpha, bestMove: entry.bestMove };
-            } else if (entry.flag === 2 && entry.evaluation >= beta) { // Upper bound
+            } else if (entry.flag === 2 && evalScore >= beta) {
                 return { evaluation: beta, bestMove: entry.bestMove };
             }
         }
@@ -224,24 +228,6 @@ class PersistentMoveTree {
         this.saveToStorage();
     }
 
-    extendLine(currentMoveSequence, newVariations) {
-        const extendedMoves = [];
-        
-        for (const variation of newVariations) {
-            const fullSequence = [...currentMoveSequence, variation.moveKey];
-            extendedMoves.push({
-                moveKey: variation.moveKey,
-                fullSequence,
-                evaluation: variation.evaluation
-            });
-        }
-        
-        if (extendedMoves.length > 0) {
-            console.log(`🔍 Extended current line by ${extendedMoves.length} new variations`);
-        }
-        return extendedMoves;
-    }
-
     saveToStorage() {
         try {
             const data = {
@@ -261,7 +247,7 @@ class PersistentMoveTree {
             const saved = localStorage.getItem('chess_persistent_tree');
             if (saved) {
                 const data = JSON.parse(saved);
-                if (data.version === GAME_VERSION || data.version === "2.4.1") {
+                if (data.version === GAME_VERSION || data.version === "2.4.1" || data.version === "2.4.2") {
                     this.tree = new Map(data.tree);
                     this.positionCache = new Map(data.positionCache);
                     console.log(`📀 Loaded ${this.tree.size} moves from persistent memory`);
@@ -328,9 +314,9 @@ let endgameEngine = null;
 
 // Killer move heuristic
 let killerMoves = [
-    [null, null], // Depth 0 killers
-    [null, null], // Depth 1 killers
-    [null, null]  // Depth 2 killers
+    [null, null],
+    [null, null],
+    [null, null]
 ];
 let historyTable = new Map();
 
@@ -500,32 +486,34 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== QUIESCENCE SEARCH ==========
-function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 8) {
-    const standPat = evaluatePositionForSearch(boardState, player, moveCount);
+// ========== QUIESCENCE SEARCH (FIXED) ==========
+function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
+    // Base evaluation
+    let standPat = evaluatePositionForSearch(boardState, player, moveCount);
+    
+    // Safety clamp
+    if (!isFinite(standPat)) standPat = 0;
     
     if (standPat >= beta) return beta;
     if (alpha < standPat) alpha = standPat;
     
-    // Get only captures and promotions
+    // Get captures and promotions only
     const captures = getCapturesAndPromotions(boardState, player);
     if (captures.length === 0) return standPat;
     
-    // Order captures by MVV-LVA (Most Valuable Victim - Least Valuable Attacker)
+    // Order captures by MVV-LVA
     captures.sort((a, b) => {
         const victimA = PIECE_VALUES[boardState[a.toRow][a.toCol]] || 0;
         const victimB = PIECE_VALUES[boardState[b.toRow][b.toCol]] || 0;
         const attackerA = PIECE_VALUES[boardState[a.fromRow][a.fromCol]] || 0;
         const attackerB = PIECE_VALUES[boardState[b.fromRow][b.fromCol]] || 0;
-        
-        const scoreA = victimA - attackerA;
-        const scoreB = victimB - attackerB;
-        return scoreB - scoreA;
+        return (victimB - attackerB) - (victimA - attackerA);
     });
     
     for (const move of captures) {
-        // Delta pruning
         const victimValue = PIECE_VALUES[boardState[move.toRow][move.toCol]] || 0;
+        
+        // Delta pruning (skip if can't possibly raise alpha)
         if (standPat + victimValue + 200 < alpha) continue;
         
         const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
@@ -534,8 +522,10 @@ function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 8) {
         const nextPlayer = player === 'white' ? 'black' : 'white';
         const score = -quiescenceSearch(newBoard, -beta, -alpha, nextPlayer, maxDepth - 1);
         
+        // Safety clamp
+        if (!isFinite(score)) continue;
+        
         if (score >= beta) {
-            // Store killer move
             storeKillerMove(move, 0);
             return beta;
         }
@@ -556,7 +546,7 @@ function getCapturesAndPromotions(boardState, player) {
             for (let toRow = 0; toRow < 8; toRow++) {
                 for (let toCol = 0; toCol < 8; toCol++) {
                     const target = boardState[toRow]?.[toCol];
-                    // Only captures and promotions
+                    // Capture or promotion
                     if (!target && !((piece === '♙' && toRow === 0) || (piece === '♟' && toRow === 7))) continue;
                     
                     if (isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, player)) {
@@ -570,24 +560,12 @@ function getCapturesAndPromotions(boardState, player) {
     return moves;
 }
 
-// ========== NULL MOVE PRUNING ==========
+// ========== NULL MOVE PRUNING (DISABLED FOR STABILITY) ==========
 const NULL_MOVE_REDUCTION = 2;
+const USE_NULL_MOVE = false; // Disabled to prevent instability
 
 function isNullMoveAllowed(boardState, player, depth) {
-    // Don't use null move in endgame or when in check
-    if (depth < NULL_MOVE_REDUCTION + 1) return false;
-    if (isKingInCheckForPosition(boardState, player)) return false;
-    
-    // Count material to detect endgame
-    let pieceCount = 0;
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = boardState[row]?.[col];
-            if (piece && piece !== '♔' && piece !== '♚') pieceCount++;
-        }
-    }
-    
-    return pieceCount > 6; // Not in endgame
+    return false; // Disabled
 }
 
 // ========== KILLER MOVE HEURISTIC ==========
@@ -597,13 +575,11 @@ function storeKillerMove(move, depth) {
     const killer1 = killerMoves[depth][0];
     const killer2 = killerMoves[depth][1];
     
-    // Don't store duplicates
     if (killer1 && killer1.fromRow === move.fromRow && killer1.fromCol === move.fromCol &&
         killer1.toRow === move.toRow && killer1.toCol === move.toCol) return;
     if (killer2 && killer2.fromRow === move.fromRow && killer2.fromCol === move.fromCol &&
         killer2.toRow === move.toRow && killer2.toCol === move.toCol) return;
     
-    // Shift and store
     killerMoves[depth][1] = killerMoves[depth][0];
     killerMoves[depth][0] = { ...move };
 }
@@ -641,7 +617,7 @@ function orderMoves(moves, boardState, player, ttMove, depth) {
     const scoredMoves = moves.map(move => {
         let score = 0;
         
-        // TT move gets highest priority
+        // TT move highest priority
         if (ttMove && ttMove.fromRow === move.fromRow && ttMove.fromCol === move.fromCol &&
             ttMove.toRow === move.toRow && ttMove.toCol === move.toCol) {
             score = 1000000;
@@ -663,10 +639,10 @@ function orderMoves(moves, boardState, player, ttMove, depth) {
         // History heuristic
         score += getHistoryScore(move, player) / 100;
         
-        // Center control bonus in opening
+        // Center control in opening
         if (moveCount < 20) {
             const toSquare = move.toRow * 8 + move.toCol;
-            const centerSquares = [27, 28, 35, 36]; // e4, d4, e5, d5
+            const centerSquares = [27, 28, 35, 36];
             if (centerSquares.includes(toSquare)) score += 50;
         }
         
@@ -733,21 +709,14 @@ function evaluateCheckmatePatterns(boardState, player) {
     
     if (!opponentKing) return 0;
     
-    // King in corner is easier to checkmate
     const isKingInCorner = (opponentKing.row === 0 || opponentKing.row === 7) && 
                            (opponentKing.col === 0 || opponentKing.col === 7);
-    if (isKingInCorner) {
-        mateScore += 30;
-    }
+    if (isKingInCorner) mateScore += 30;
     
-    // King on edge is good for attacking
     const isKingOnEdge = opponentKing.row === 0 || opponentKing.row === 7 || 
                          opponentKing.col === 0 || opponentKing.col === 7;
-    if (isKingOnEdge) {
-        mateScore += 15;
-    }
+    if (isKingOnEdge) mateScore += 15;
     
-    // Count attacking pieces near enemy king
     let attackersNearKing = 0;
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
@@ -762,7 +731,6 @@ function evaluateCheckmatePatterns(boardState, player) {
     }
     mateScore += attackersNearKing * 20;
     
-    // Enemy king has no escape squares (checkmate pattern)
     let escapeSquares = 0;
     for (let dr = -1; dr <= 1; dr++) {
         for (let dc = -1; dc <= 1; dc++) {
@@ -780,27 +748,22 @@ function evaluateCheckmatePatterns(boardState, player) {
         }
     }
     
-    // Fewer escape squares = closer to checkmate
     if (escapeSquares === 0) {
         mateScore += 100;
     } else if (escapeSquares <= 2) {
         mateScore += 50;
     }
     
-    // Bonus for having queen near enemy king (common checkmate pattern)
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
             if (piece && ((player === 'white' && piece === '♕') || (player === 'black' && piece === '♛'))) {
                 const distance = Math.abs(row - opponentKing.row) + Math.abs(col - opponentKing.col);
-                if (distance <= 2) {
-                    mateScore += 40;
-                }
+                if (distance <= 2) mateScore += 40;
             }
         }
     }
     
-    // Rook on the same file/rank as enemy king (back rank mate pattern)
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const piece = boardState[row] && boardState[row][col];
@@ -1154,7 +1117,7 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (Quiescence + Null Move + PVS + Zobrist TT)`);
+    console.log(`Version: ${GAME_VERSION} (Fixed QS + TT + PVS)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
@@ -1184,8 +1147,6 @@ window.stats = function() {
         console.log(`White wins: ${pStats.whiteWins} (${(pStats.whiteWins/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Black wins: ${pStats.blackWins} (${(pStats.blackWins/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Draws: ${pStats.draws} (${(pStats.draws/pStats.totalGames*100).toFixed(1)}%)`);
-        console.log(`Avg moves/game: ${pStats.avgMoves}`);
-        console.log(`Patterns learned: ${pStats.tacticalPatterns}`);
     }
     
     return "Stats displayed above";
@@ -1237,21 +1198,13 @@ window.analyzeMove = function(moveStr) {
     const checkmateScore = evaluateCheckmatePatterns(boardState, currentPlayer);
     console.log(`  Checkmate potential: ${checkmateScore}`);
     
-    if (patternLearner && patternLearner.loaded) {
-        const advice = patternLearner.getTacticalAdvice(boardState, currentPlayer);
-        if (advice && advice.length) {
-            console.log(`\n  📚 Pattern DB Advice:`);
-            advice.forEach(a => console.log(`    • ${a}`));
-        }
-    }
-    
     return { wouldHang, checkmateScore };
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.2                ║");
-    console.log("║    (Quiescence + Null Move + PVS + Zobrist Transposition)      ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.3                ║");
+    console.log("║          (Fixed QS + TT + PVS - Stable & Smart)               ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -1270,17 +1223,15 @@ window.help = function() {
     console.log("\n🎯 ANALYSIS:");
     console.log("  analyzeMove('e4d5') - Analyze move quality");
     console.log("\n📊 GAME INFO:");
-    console.log("  stats()            - Show game statistics (incl. TT size)");
+    console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory and TT");
     console.log("  help()             - Show this help");
-    console.log("\n🆕 v2.4.2 Features:");
-    console.log("  • Quiescence Search (prevents horizon effect)");
-    console.log("  • Null Move Pruning (faster search)");
-    console.log("  • Principal Variation Search (PVS)");
-    console.log("  • Zobrist Transposition Table");
-    console.log("  • Killer Move Heuristic");
-    console.log("  • MVV-LVA Move Ordering");
+    console.log("\n🆕 v2.4.3 Fixes:");
+    console.log("  • Fixed -Infinity evaluation bug");
+    console.log("  • Stabilized Quiescence Search");
+    console.log("  • Disabled unstable Null Move Pruning");
+    console.log("  • Proper TT integration");
     console.log("\n");
     return "Help displayed above";
 };
@@ -1349,11 +1300,6 @@ let riskAssessor = new RiskAssessment();
 // ========== CORE GAME FUNCTIONS ==========
 
 function displayVersion() {
-    const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Quiescence + Null Move + PVS + TT`);
-    console.log(`📦 Memory: ${stats.totalMoves} cached moves, TT: ${transpositionTable.size()} entries`);
-    console.log(`📚 Pattern DB: ${patternLearner && patternLearner.loaded ? 'Loaded' : 'Not loaded'}`);
-
     const versionDisplay = document.getElementById('ai-version');
     if (versionDisplay) {
         versionDisplay.textContent = `v${GAME_VERSION}`;
@@ -1381,21 +1327,32 @@ window.addEventListener('load', function() {
     if (typeof GamePatternLearner !== 'undefined') {
         patternLearner = new GamePatternLearner();
         
-        fetch('games.csv')
-            .then(response => {
-                if (!response.ok) throw new Error('CSV not found');
-                return response.text();
-            })
-            .then(csvText => {
-                return patternLearner.loadFromCSV(csvText);
-            })
-            .then(loaded => {
-                console.log(`🧠 Pattern Learner: Loaded ${loaded} games for evaluation training`);
-                updateAIStats();
-            })
-            .catch(err => {
+        // Try multiple possible paths for games.csv
+        const csvPaths = ['games.csv', './games.csv', '../games.csv', '/games.csv'];
+        let loaded = false;
+        
+        const tryLoadCSV = async () => {
+            for (const path of csvPaths) {
+                try {
+                    const response = await fetch(path);
+                    if (response.ok) {
+                        const csvText = await response.text();
+                        const count = await patternLearner.loadFromCSV(csvText);
+                        console.log(`🧠 Pattern Learner: Loaded ${count} games from ${path}`);
+                        loaded = true;
+                        updateAIStats();
+                        break;
+                    }
+                } catch (e) {
+                    // Continue to next path
+                }
+            }
+            if (!loaded) {
                 console.log('⚠️ Pattern learner: Could not load games.csv - using standard evaluation');
-            });
+            }
+        };
+        
+        tryLoadCSV();
     } else {
         console.log("⚠️ Pattern learner not found - using standard evaluation");
     }
@@ -2205,21 +2162,21 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     // Apply endgame check penalty
     evaluation += getEndgameCheckPenalty(boardState, player, moveHistory);
     
-    // Add checkmate pattern bonus (only for the player to move)
+    // Add checkmate pattern bonus
     const mateBonus = evaluateCheckmatePatterns(boardState, player);
     evaluation += mateBonus;
     
     return evaluation;
 }
 
-// ========== ENHANCED MINIMAX WITH PVS, NULL MOVE, AND TRANSPOSITION TABLE ==========
+// ========== MINIMAX WITH PVS AND TT (FIXED) ==========
 
 const SEARCH_CONFIG = {
     baseDepth: 3,
     endgameDepth: 5,
     useMemory: true,
     riskAssessment: true,
-    useNullMove: true,
+    useNullMove: false, // Disabled for stability
     usePVS: true,
     useQuiescence: true
 };
@@ -2235,8 +2192,10 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
     
     const ttMove = ttEntry?.bestMove || null;
     
-    // Check for checkmate/stalemate
+    // Get all moves
     const moves = getAllPossibleMovesForPosition(boardState, player);
+    
+    // Check for checkmate/stalemate
     if (moves.length === 0) {
         const inCheck = isKingInCheckForPosition(boardState, player);
         const evalScore = inCheck ? (isMaximizingPlayer ? -20000 + depth : 20000 - depth) : 0;
@@ -2244,21 +2203,12 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
         return evalScore;
     }
     
-    // Null Move Pruning
-    if (SEARCH_CONFIG.useNullMove && allowNullMove && isNullMoveAllowed(boardState, player, depth)) {
-        const nextPlayer = player === 'white' ? 'black' : 'white';
-        const nullScore = -minimaxWithPVS(boardState, depth - NULL_MOVE_REDUCTION - 1, -beta, -beta + 1, 
-                                         !isMaximizingPlayer, nextPlayer, moveNumber + 1, false);
-        
-        if (nullScore >= beta) {
-            return beta;
-        }
-    }
-    
     // Quiescence search at leaf nodes
     if (depth === 0) {
         if (SEARCH_CONFIG.useQuiescence) {
-            return quiescenceSearch(boardState, alpha, beta, player);
+            const qScore = quiescenceSearch(boardState, alpha, beta, player);
+            transpositionTable.store(hash, 0, qScore, 0, null);
+            return qScore;
         }
         const evalScore = evaluatePositionForSearch(boardState, player, moveNumber);
         transpositionTable.store(hash, 0, evalScore, 0, null);
@@ -2280,16 +2230,20 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
             let evalScore;
             
             if (i === 0 || !SEARCH_CONFIG.usePVS) {
-                // Full window search for first move
                 evalScore = -minimaxWithPVS(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1);
             } else {
-                // Zero-window search (PVS)
+                // Zero-window search
                 evalScore = -minimaxWithPVS(newBoard, depth - 1, -alpha - 1, -alpha, false, nextPlayer, moveNumber + 1);
                 
-                // If move might be better, do full re-search
+                // Re-search if promising
                 if (evalScore > alpha && evalScore < beta) {
                     evalScore = -minimaxWithPVS(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1);
                 }
+            }
+            
+            // Safety clamp
+            if (!isFinite(evalScore)) {
+                evalScore = evaluatePositionForSearch(newBoard, nextPlayer, moveNumber + 1);
             }
             
             if (evalScore > maxEval) {
@@ -2308,7 +2262,6 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
             }
         }
         
-        // Store in transposition table
         const flag = maxEval >= beta ? 2 : (maxEval > alpha ? 0 : 1);
         transpositionTable.store(hash, depth, maxEval, flag, bestMove);
         
@@ -2332,6 +2285,11 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
                 if (evalScore < beta && evalScore > alpha) {
                     evalScore = minimaxWithPVS(newBoard, depth - 1, alpha, beta, true, nextPlayer, moveNumber + 1);
                 }
+            }
+            
+            // Safety clamp
+            if (!isFinite(evalScore)) {
+                evalScore = evaluatePositionForSearch(newBoard, nextPlayer, moveNumber + 1);
             }
             
             if (evalScore < minEval) {
@@ -2391,50 +2349,40 @@ function findBestMoveWithRiskAssessment() {
             }
         }
         
-        let cachedResult = null;
-        if (moveTree && SEARCH_CONFIG.useMemory) {
-            cachedResult = moveTree.getCachedEvaluation(move, board, currentPlayer, castlingRights, enPassantTarget);
+        const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
+        
+        const score = minimaxWithPVS(newBoard, searchDepth - 1, -Infinity, Infinity, 
+                                   currentPlayer === 'white' ? false : true,
+                                   currentPlayer === 'white' ? 'black' : 'white', 
+                                   moveCount + 1);
+        
+        let bestCase = score;
+        if (!isFinite(bestCase) || isNaN(bestCase)) {
+            console.warn(`Invalid eval for move, using fallback`);
+            bestCase = evaluatePositionForSearch(newBoard, currentPlayer === 'white' ? 'black' : 'white', moveCount + 1);
         }
         
-        if (cachedResult) {
-            evaluatedMoves.push({
-                move,
-                bestCase: cachedResult.evaluation,
-                worstCase: cachedResult.evaluation - 100,
-                depth: cachedResult.depth
-            });
-        } else {
-            const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
-            
-            // Use enhanced PVS search
-            const score = minimaxWithPVS(newBoard, searchDepth - 1, -Infinity, Infinity, 
-                                       currentPlayer === 'white' ? false : true,
-                                       currentPlayer === 'white' ? 'black' : 'white', 
-                                       moveCount + 1);
-            
-            let bestCase = score;
-            const worstCase = score - 100; // Conservative estimate
-            
-            const targetPiece = board[move.toRow][move.toCol];
-            if (targetPiece) {
-                const captureSafety = evaluateCaptureSafety(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
-                bestCase += captureSafety;
-            }
-            
-            if (wouldHangPiece(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer)) {
-                bestCase -= 80;
-            }
-            
-            evaluatedMoves.push({
-                move,
-                bestCase: bestCase,
-                worstCase: worstCase,
-                depth: searchDepth
-            });
-            
-            if (moveTree && SEARCH_CONFIG.useMemory) {
-                moveTree.storeMoveEvaluation(move, bestCase, searchDepth, [{ worst: worstCase }]);
-            }
+        const worstCase = bestCase - 100;
+        
+        const targetPiece = board[move.toRow][move.toCol];
+        if (targetPiece) {
+            const captureSafety = evaluateCaptureSafety(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+            bestCase += captureSafety;
+        }
+        
+        if (wouldHangPiece(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer)) {
+            bestCase -= 80;
+        }
+        
+        evaluatedMoves.push({
+            move,
+            bestCase: bestCase,
+            worstCase: worstCase,
+            depth: searchDepth
+        });
+        
+        if (moveTree && SEARCH_CONFIG.useMemory) {
+            moveTree.storeMoveEvaluation(move, bestCase, searchDepth, [{ worst: worstCase }]);
         }
     }
     
@@ -2457,7 +2405,7 @@ function findBestMoveWithRiskAssessment() {
     
     const searchTime = (performance.now() - searchStartTime).toFixed(0);
     const moveStr = toAlgebraicMove(bestSafeMove.move.fromRow, bestSafeMove.move.fromCol, bestSafeMove.move.toRow, bestSafeMove.move.toCol);
-    console.log(`⏱️ Search time: ${searchTime}ms | Selected: ${moveStr} | Eval: ${bestSafeMove.bestCase}`);
+    console.log(`⏱️ Search time: ${searchTime}ms | Selected: ${moveStr} | Eval: ${bestSafeMove.bestCase.toFixed(1)}`);
     console.log(`📊 TT size: ${transpositionTable.size()} entries`);
     
     return bestSafeMove.move;
@@ -2516,12 +2464,14 @@ function updateAIStats() {
     let winRate = '65';
     if (patternLearner && patternLearner.loaded) {
         const stats = patternLearner.getStats();
-        winRate = Math.round((stats.whiteWins / stats.totalGames) * 100);
+        if (stats.totalGames > 0) {
+            winRate = Math.round((stats.whiteWins / stats.totalGames) * 100);
+        }
     }
     winRateElement.textContent = winRate;
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.4.2 (QS+NMP+PVS+TT)`;
+        difficultyElement.textContent = `PMTS v${GAME_VERSION}`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2563,9 +2513,10 @@ function newGame() {
         moveTree.activeLineMoves = [];
     }
     
-    // Reset killer moves and history table
+    // Reset search heuristics
     killerMoves = [[null, null], [null, null], [null, null]];
     historyTable.clear();
+    transpositionTable.clear();
 
     createBoard();
     updateStatus();
@@ -2582,7 +2533,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Quiescence + Null Move + PVS + TT!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} (Stable & Smart)`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2638,7 +2589,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (v2.4.2)';
+        gameModeDisplay.textContent = `vs AI (v${GAME_VERSION})`;
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer === aiPlayer && !gameOver) {
@@ -2664,7 +2615,7 @@ function clearMemory() {
     }
 }
 
-// ========== EXPOSE FUNCTIONS GLOBALLY FOR HTML ONCLICK ==========
+// ========== EXPOSE FUNCTIONS GLOBALLY ==========
 if (typeof window !== 'undefined') {
     window.newGame = newGame;
     window.undoMove = undoMove;
@@ -2684,6 +2635,6 @@ if (typeof window !== 'undefined') {
     window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Quiescence + Null Move + PVS + Zobrist TT!`);
-console.log(`🎯 AI now searches smarter with transposition table and tactical quiescence!`);
-console.log(`💡 Type 'help()' for all commands, 'stats()' to see TT size!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Fixed & Stable!`);
+console.log(`🎯 AI: QS + TT + PVS (Null Move disabled for stability)`);
+console.log(`💡 Type 'help()' for commands`);

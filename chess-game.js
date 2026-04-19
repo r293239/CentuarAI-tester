@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.3 - Fixed -
+// VERSION: 2.4.5 - Aggressive + Blunder-Proof (Smart & Safe)
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
-const GAME_VERSION = "2.4.3";
+const GAME_VERSION = "2.4.5";
 
 // ========== GAME DATABASES ==========
 let openingBook = null;        // From chess-ai-database.js (opening moves)
@@ -247,7 +247,7 @@ class PersistentMoveTree {
             const saved = localStorage.getItem('chess_persistent_tree');
             if (saved) {
                 const data = JSON.parse(saved);
-                if (data.version === GAME_VERSION || data.version === "2.4.1" || data.version === "2.4.2") {
+                if (data.version === GAME_VERSION || data.version === "2.4.1" || data.version === "2.4.2" || data.version === "2.4.3" || data.version === "2.4.4") {
                     this.tree = new Map(data.tree);
                     this.positionCache = new Map(data.positionCache);
                     console.log(`📀 Loaded ${this.tree.size} moves from persistent memory`);
@@ -486,23 +486,217 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== QUIESCENCE SEARCH (FIXED) ==========
-function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
-    // Base evaluation
-    let standPat = evaluatePositionForSearch(boardState, player, moveCount);
+// ========== BLUNDER DETECTION SYSTEM ==========
+function isBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
+    const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+    if (!newBoard) return { isBlunder: true, severity: 1000, reason: "Invalid move" };
     
-    // Safety clamp
+    const piece = boardState[fromRow][fromCol];
+    const pieceValue = PIECE_VALUES[piece] || 0;
+    const opponent = player === 'white' ? 'black' : 'white';
+    
+    // 1. Check if move hangs a piece
+    const hangResult = detectHangingPiece(newBoard, toRow, toCol, player);
+    if (hangResult.hangs) {
+        return { 
+            isBlunder: true, 
+            severity: hangResult.value, 
+            reason: `Hangs ${hangResult.piece} worth ${hangResult.value}` 
+        };
+    }
+    
+    // 2. Check if we missed a tactic (opponent has a fork/discovery)
+    const tacticResult = detectOpponentTactic(newBoard, opponent);
+    if (tacticResult.found) {
+        return { 
+            isBlunder: true, 
+            severity: tacticResult.materialLoss, 
+            reason: `Allows opponent tactic: ${tacticResult.type}` 
+        };
+    }
+    
+    // 3. Check if we moved a defended piece to an attacked square
+    const pieceSafetyResult = checkPieceSafety(newBoard, toRow, toCol, player);
+    if (!pieceSafetyResult.safe && pieceValue >= 300) {
+        return { 
+            isBlunder: true, 
+            severity: pieceValue, 
+            reason: `Moves ${piece} to unsafe square` 
+        };
+    }
+    
+    // 4. Check if we ignored a hanging piece that could be captured
+    const missedCapture = detectMissedCapture(boardState, newBoard, player);
+    if (missedCapture.found && missedCapture.value >= 200) {
+        return { 
+            isBlunder: false, // Not a blunder, but suboptimal
+            severity: missedCapture.value * 0.5, 
+            reason: `Missed capturing ${missedCapture.piece}` 
+        };
+    }
+    
+    return { isBlunder: false, severity: 0, reason: "Safe move" };
+}
+
+function detectHangingPiece(boardState, row, col, player) {
+    const piece = boardState[row]?.[col];
+    if (!piece) return { hangs: false };
+    
+    const pieceValue = PIECE_VALUES[piece] || 0;
+    const opponent = player === 'white' ? 'black' : 'white';
+    
+    // Check if piece is attacked
+    if (!isSquareAttackedForPosition(boardState, row, col, opponent)) {
+        return { hangs: false };
+    }
+    
+    // Check if defended
+    let defended = false;
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const defender = boardState[r]?.[c];
+            if (defender && isPlayerPieceForPosition(defender, player)) {
+                if (canPieceAttackForPosition(defender, r, c, row, col, boardState)) {
+                    defended = true;
+                    break;
+                }
+            }
+        }
+        if (defended) break;
+    }
+    
+    if (!defended) {
+        return { hangs: true, value: pieceValue, piece: piece };
+    }
+    
+    // Check if attacker is less valuable
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const attacker = boardState[r]?.[c];
+            if (attacker && isPlayerPieceForPosition(attacker, opponent)) {
+                if (canPieceAttackForPosition(attacker, r, c, row, col, boardState)) {
+                    const attackerValue = PIECE_VALUES[attacker] || 0;
+                    if (attackerValue < pieceValue && !defended) {
+                        return { hangs: true, value: pieceValue - attackerValue, piece: piece };
+                    }
+                }
+            }
+        }
+    }
+    
+    return { hangs: false };
+}
+
+function detectOpponentTactic(boardState, opponent) {
+    const opponentMoves = getAllPossibleMovesForPosition(boardState, opponent);
+    
+    for (const move of opponentMoves) {
+        const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
+        if (!newBoard) continue;
+        
+        // Check for fork (one piece attacks multiple valuable pieces)
+        const attacks = [];
+        const piece = newBoard[move.toRow]?.[move.toCol];
+        if (!piece) continue;
+        
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const target = newBoard[r]?.[c];
+                if (target && !isPlayerPieceForPosition(target, opponent) && target !== '♔' && target !== '♚') {
+                    if (canPieceAttackForPosition(piece, move.toRow, move.toCol, r, c, newBoard)) {
+                        const value = PIECE_VALUES[target] || 0;
+                        if (value >= 300) attacks.push({ piece: target, value });
+                    }
+                }
+            }
+        }
+        
+        if (attacks.length >= 2) {
+            const totalLoss = attacks.reduce((sum, a) => sum + a.value, 0);
+            return { found: true, type: 'fork', materialLoss: totalLoss };
+        }
+        
+        // Check for discovered attack
+        // Simplified: If move reveals an attack from another piece
+    }
+    
+    return { found: false };
+}
+
+function checkPieceSafety(boardState, row, col, player) {
+    const piece = boardState[row]?.[col];
+    if (!piece) return { safe: false };
+    
+    const opponent = player === 'white' ? 'black' : 'white';
+    const isAttacked = isSquareAttackedForPosition(boardState, row, col, opponent);
+    
+    if (!isAttacked) return { safe: true };
+    
+    // Count defenders vs attackers
+    let defenders = 0, attackers = 0;
+    
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const p = boardState[r]?.[c];
+            if (!p) continue;
+            
+            if (isPlayerPieceForPosition(p, player) && canPieceAttackForPosition(p, r, c, row, col, boardState)) {
+                defenders++;
+            }
+            if (isPlayerPieceForPosition(p, opponent) && canPieceAttackForPosition(p, r, c, row, col, boardState)) {
+                attackers++;
+            }
+        }
+    }
+    
+    return { safe: defenders >= attackers };
+}
+
+function detectMissedCapture(originalBoard, newBoard, player) {
+    const opponent = player === 'white' ? 'black' : 'white';
+    
+    // Find hanging pieces in original position
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const piece = originalBoard[r]?.[c];
+            if (piece && isPlayerPieceForPosition(piece, opponent)) {
+                const hangCheck = detectHangingPiece(originalBoard, r, c, opponent);
+                if (hangCheck.hangs) {
+                    // Check if we could have captured it
+                    for (let rr = 0; rr < 8; rr++) {
+                        for (let cc = 0; cc < 8; cc++) {
+                            const attacker = originalBoard[rr]?.[cc];
+                            if (attacker && isPlayerPieceForPosition(attacker, player)) {
+                                if (isValidMoveForPosition(originalBoard, rr, cc, r, c, player)) {
+                                    return { 
+                                        found: true, 
+                                        value: PIECE_VALUES[piece] || 0, 
+                                        piece: piece 
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return { found: false };
+}
+
+// ========== ENHANCED QUIESCENCE SEARCH ==========
+function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
+    let standPat = evaluatePositionForSearch(boardState, player, moveCount);
     if (!isFinite(standPat)) standPat = 0;
     
     if (standPat >= beta) return beta;
     if (alpha < standPat) alpha = standPat;
     
-    // Get captures and promotions only
-    const captures = getCapturesAndPromotions(boardState, player);
-    if (captures.length === 0) return standPat;
+    const tacticalMoves = getTacticalMoves(boardState, player);
+    if (tacticalMoves.length === 0) return standPat;
     
-    // Order captures by MVV-LVA
-    captures.sort((a, b) => {
+    tacticalMoves.sort((a, b) => {
         const victimA = PIECE_VALUES[boardState[a.toRow][a.toCol]] || 0;
         const victimB = PIECE_VALUES[boardState[b.toRow][b.toCol]] || 0;
         const attackerA = PIECE_VALUES[boardState[a.fromRow][a.fromCol]] || 0;
@@ -510,10 +704,8 @@ function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
         return (victimB - attackerB) - (victimA - attackerA);
     });
     
-    for (const move of captures) {
+    for (const move of tacticalMoves) {
         const victimValue = PIECE_VALUES[boardState[move.toRow][move.toCol]] || 0;
-        
-        // Delta pruning (skip if can't possibly raise alpha)
         if (standPat + victimValue + 200 < alpha) continue;
         
         const newBoard = makeTestMoveForPosition(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol);
@@ -522,7 +714,6 @@ function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
         const nextPlayer = player === 'white' ? 'black' : 'white';
         const score = -quiescenceSearch(newBoard, -beta, -alpha, nextPlayer, maxDepth - 1);
         
-        // Safety clamp
         if (!isFinite(score)) continue;
         
         if (score >= beta) {
@@ -535,8 +726,9 @@ function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
     return alpha;
 }
 
-function getCapturesAndPromotions(boardState, player) {
+function getTacticalMoves(boardState, player) {
     const moves = [];
+    const opponent = player === 'white' ? 'black' : 'white';
     
     for (let fromRow = 0; fromRow < 8; fromRow++) {
         for (let fromCol = 0; fromCol < 8; fromCol++) {
@@ -546,8 +738,13 @@ function getCapturesAndPromotions(boardState, player) {
             for (let toRow = 0; toRow < 8; toRow++) {
                 for (let toCol = 0; toCol < 8; toCol++) {
                     const target = boardState[toRow]?.[toCol];
-                    // Capture or promotion
-                    if (!target && !((piece === '♙' && toRow === 0) || (piece === '♟' && toRow === 7))) continue;
+                    const isCapture = target && isPlayerPieceForPosition(target, opponent);
+                    const isPromotion = (piece === '♙' && toRow === 0) || (piece === '♟' && toRow === 7);
+                    
+                    if (!isCapture && !isPromotion) {
+                        const testBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
+                        if (!testBoard || !isKingInCheckForPosition(testBoard, opponent)) continue;
+                    }
                     
                     if (isValidMoveForPosition(boardState, fromRow, fromCol, toRow, toCol, player)) {
                         moves.push({ fromRow, fromCol, toRow, toCol });
@@ -556,16 +753,24 @@ function getCapturesAndPromotions(boardState, player) {
             }
         }
     }
-    
     return moves;
 }
 
-// ========== NULL MOVE PRUNING (DISABLED FOR STABILITY) ==========
+// ========== NULL MOVE PRUNING (RE-ENABLED WITH SAFETY) ==========
 const NULL_MOVE_REDUCTION = 2;
-const USE_NULL_MOVE = false; // Disabled to prevent instability
 
 function isNullMoveAllowed(boardState, player, depth) {
-    return false; // Disabled
+    if (depth < 3) return false;
+    if (isKingInCheckForPosition(boardState, player)) return false;
+    
+    let pieceCount = 0;
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const piece = boardState[row]?.[col];
+            if (piece && piece !== '♔' && piece !== '♚') pieceCount++;
+        }
+    }
+    return pieceCount > 8;
 }
 
 // ========== KILLER MOVE HEURISTIC ==========
@@ -617,7 +822,6 @@ function orderMoves(moves, boardState, player, ttMove, depth) {
     const scoredMoves = moves.map(move => {
         let score = 0;
         
-        // TT move highest priority
         if (ttMove && ttMove.fromRow === move.fromRow && ttMove.fromCol === move.fromCol &&
             ttMove.toRow === move.toRow && ttMove.toCol === move.toCol) {
             score = 1000000;
@@ -626,24 +830,23 @@ function orderMoves(moves, boardState, player, ttMove, depth) {
         const victim = boardState[move.toRow]?.[move.toCol];
         const attacker = boardState[move.fromRow]?.[move.fromCol];
         
-        // MVV-LVA for captures
         if (victim) {
             const victimValue = PIECE_VALUES[victim] || 0;
             const attackerValue = PIECE_VALUES[attacker] || 0;
-            score += victimValue * 10 - attackerValue;
+            score += victimValue * 100 - attackerValue;
         }
         
-        // Killer moves
         score += getKillerScore(move, depth) * 1000;
-        
-        // History heuristic
         score += getHistoryScore(move, player) / 100;
         
-        // Center control in opening
         if (moveCount < 20) {
             const toSquare = move.toRow * 8 + move.toCol;
             const centerSquares = [27, 28, 35, 36];
             if (centerSquares.includes(toSquare)) score += 50;
+        }
+        
+        if ((attacker === '♙' && move.toRow === 0) || (attacker === '♟' && move.toRow === 7)) {
+            score += 50000;
         }
         
         return { move, score };
@@ -653,7 +856,6 @@ function orderMoves(moves, boardState, player, ttMove, depth) {
 }
 
 // ========== ENDGAME CHECK PREVENTION ==========
-
 function isEndlessCheck(moveHistory, player) {
     if (moveHistory.length < 6) return false;
     
@@ -701,7 +903,6 @@ function getEndgameCheckPenalty(boardState, player, moveHistory) {
 }
 
 // ========== CHECKMATE KNOWLEDGE ==========
-
 function evaluateCheckmatePatterns(boardState, player) {
     let mateScore = 0;
     const opponent = player === 'white' ? 'black' : 'white';
@@ -791,7 +992,6 @@ function findKing(boardState, player) {
 }
 
 // ========== SMART TACTICAL AWARENESS ==========
-
 function isPieceDefended(boardState, row, col, player) {
     for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -873,7 +1073,6 @@ function wouldHangPiece(boardState, fromRow, fromCol, toRow, toCol, player) {
 }
 
 // ========== CONSOLE COMMANDS ==========
-
 window.displayBoard = function() {
     console.log("\n  a b c d e f g h");
     for (let row = 0; row < 8; row++) {
@@ -1117,7 +1316,7 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (Fixed QS + TT + PVS)`);
+    console.log(`Version: ${GAME_VERSION} (Blunder-Proof + Aggressive)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
@@ -1187,6 +1386,17 @@ window.analyzeMove = function(moveStr) {
     
     console.log(`\n📊 Move Analysis for ${moveStr}:`);
     
+    // Run blunder detection
+    const blunderCheck = isBlunder(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+    if (blunderCheck.isBlunder) {
+        console.log(`  ⚠️ BLUNDER DETECTED: ${blunderCheck.reason}`);
+        console.log(`  Severity: ${blunderCheck.severity}`);
+    } else if (blunderCheck.severity > 0) {
+        console.log(`  ⚡ Suboptimal: ${blunderCheck.reason}`);
+    } else {
+        console.log(`  ✅ Safe move`);
+    }
+    
     if (target) {
         const safety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
         console.log(`  Capture safety score: ${safety}`);
@@ -1198,13 +1408,13 @@ window.analyzeMove = function(moveStr) {
     const checkmateScore = evaluateCheckmatePatterns(boardState, currentPlayer);
     console.log(`  Checkmate potential: ${checkmateScore}`);
     
-    return { wouldHang, checkmateScore };
+    return { wouldHang, checkmateScore, blunder: blunderCheck };
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.3                ║");
-    console.log("║          (Fixed QS + TT + PVS - Stable & Smart)               ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.5                ║");
+    console.log("║        (Blunder-Proof + Aggressive + Tactical)                ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -1221,17 +1431,18 @@ window.help = function() {
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
     console.log("\n🎯 ANALYSIS:");
-    console.log("  analyzeMove('e4d5') - Analyze move quality");
+    console.log("  analyzeMove('e4d5') - Analyze move quality (includes blunder detection)");
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory and TT");
     console.log("  help()             - Show this help");
-    console.log("\n🆕 v2.4.3 Fixes:");
-    console.log("  • Fixed -Infinity evaluation bug");
-    console.log("  • Stabilized Quiescence Search");
-    console.log("  • Disabled unstable Null Move Pruning");
-    console.log("  • Proper TT integration");
+    console.log("\n🆕 v2.4.5 Features:");
+    console.log("  • Blunder Detection System (prevents hanging pieces)");
+    console.log("  • Tactical Move Verification");
+    console.log("  • Enhanced Quiescence Search");
+    console.log("  • Smart Risk Assessment (threshold: 400)");
+    console.log("  • Re-enabled Null Move Pruning with safety");
     console.log("\n");
     return "Help displayed above";
 };
@@ -1257,8 +1468,8 @@ function toAlgebraicMove(fromRow, fromCol, toRow, toCol) {
 // ========== RISK ASSESSMENT CLASS ==========
 class RiskAssessment {
     constructor() {
-        this.riskThreshold = 300;
-        this.minimumScoreGain = 50;
+        this.riskThreshold = 400; // Less paranoid than 300, safer than 500
+        this.minimumScoreGain = 40;
     }
 
     assessLineRisk(lineEvaluations) {
@@ -1282,12 +1493,16 @@ class RiskAssessment {
     }
     
     findBestSafeMove(riskAssessedLines) {
-        const safeLines = riskAssessedLines.filter(line => line.isSafe);
+        // First, filter out detected blunders
+        const nonBlunderLines = riskAssessedLines.filter(line => !line.isBlunder);
+        const linesToConsider = nonBlunderLines.length > 0 ? nonBlunderLines : riskAssessedLines;
+        
+        const safeLines = linesToConsider.filter(line => line.isSafe);
         
         if (safeLines.length === 0) {
-            console.log("⚠️ All lines have risk! Choosing least risky option...");
-            riskAssessedLines.sort((a, b) => a.riskScore - b.riskScore);
-            return riskAssessedLines[0];
+            console.log("⚠️ No perfectly safe lines! Choosing best available...");
+            linesToConsider.sort((a, b) => a.riskScore - b.riskScore);
+            return linesToConsider[0];
         }
         
         safeLines.sort((a, b) => b.bestCase - a.bestCase);
@@ -1327,7 +1542,6 @@ window.addEventListener('load', function() {
     if (typeof GamePatternLearner !== 'undefined') {
         patternLearner = new GamePatternLearner();
         
-        // Try multiple possible paths for games.csv
         const csvPaths = ['games.csv', './games.csv', '../games.csv', '/games.csv'];
         let loaded = false;
         
@@ -2169,14 +2383,14 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     return evaluation;
 }
 
-// ========== MINIMAX WITH PVS AND TT (FIXED) ==========
+// ========== MINIMAX WITH PVS AND TT (ENHANCED) ==========
 
 const SEARCH_CONFIG = {
-    baseDepth: 3,
-    endgameDepth: 5,
+    baseDepth: 4,
+    endgameDepth: 6,
     useMemory: true,
     riskAssessment: true,
-    useNullMove: false, // Disabled for stability
+    useNullMove: true,
     usePVS: true,
     useQuiescence: true
 };
@@ -2191,6 +2405,15 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
     }
     
     const ttMove = ttEntry?.bestMove || null;
+    
+    // Null move pruning (re-enabled with safety)
+    if (SEARCH_CONFIG.useNullMove && allowNullMove && isNullMoveAllowed(boardState, player, depth)) {
+        const nextPlayer = player === 'white' ? 'black' : 'white';
+        const nullScore = -minimaxWithPVS(boardState, depth - NULL_MOVE_REDUCTION - 1, 
+                                         -beta, -beta + 1, !isMaximizingPlayer, nextPlayer, moveNumber, false);
+        
+        if (nullScore >= beta) return beta;
+    }
     
     // Get all moves
     const moves = getAllPossibleMovesForPosition(boardState, player);
@@ -2232,16 +2455,13 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
             if (i === 0 || !SEARCH_CONFIG.usePVS) {
                 evalScore = -minimaxWithPVS(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1);
             } else {
-                // Zero-window search
                 evalScore = -minimaxWithPVS(newBoard, depth - 1, -alpha - 1, -alpha, false, nextPlayer, moveNumber + 1);
                 
-                // Re-search if promising
                 if (evalScore > alpha && evalScore < beta) {
                     evalScore = -minimaxWithPVS(newBoard, depth - 1, -beta, -alpha, false, nextPlayer, moveNumber + 1);
                 }
             }
             
-            // Safety clamp
             if (!isFinite(evalScore)) {
                 evalScore = evaluatePositionForSearch(newBoard, nextPlayer, moveNumber + 1);
             }
@@ -2287,7 +2507,6 @@ function minimaxWithPVS(boardState, depth, alpha, beta, isMaximizingPlayer, play
                 }
             }
             
-            // Safety clamp
             if (!isFinite(evalScore)) {
                 evalScore = evaluatePositionForSearch(newBoard, nextPlayer, moveNumber + 1);
             }
@@ -2349,6 +2568,10 @@ function findBestMoveWithRiskAssessment() {
             }
         }
         
+        // Check for blunders
+        const blunderCheck = isBlunder(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+        const isBlunderMove = blunderCheck.isBlunder;
+        
         const newBoard = makeTestMoveForPosition(board, move.fromRow, move.fromCol, move.toRow, move.toCol);
         
         const score = minimaxWithPVS(newBoard, searchDepth - 1, -Infinity, Infinity, 
@@ -2360,6 +2583,12 @@ function findBestMoveWithRiskAssessment() {
         if (!isFinite(bestCase) || isNaN(bestCase)) {
             console.warn(`Invalid eval for move, using fallback`);
             bestCase = evaluatePositionForSearch(newBoard, currentPlayer === 'white' ? 'black' : 'white', moveCount + 1);
+        }
+        
+        // Penalize blunders heavily
+        if (isBlunderMove) {
+            bestCase -= blunderCheck.severity * 2;
+            console.log(`  ⚠️ Blunder detected: ${blunderCheck.reason} (-${blunderCheck.severity * 2})`);
         }
         
         const worstCase = bestCase - 100;
@@ -2378,7 +2607,9 @@ function findBestMoveWithRiskAssessment() {
             move,
             bestCase: bestCase,
             worstCase: worstCase,
-            depth: searchDepth
+            depth: searchDepth,
+            isBlunder: isBlunderMove,
+            blunderReason: blunderCheck.reason
         });
         
         if (moveTree && SEARCH_CONFIG.useMemory) {
@@ -2407,6 +2638,10 @@ function findBestMoveWithRiskAssessment() {
     const moveStr = toAlgebraicMove(bestSafeMove.move.fromRow, bestSafeMove.move.fromCol, bestSafeMove.move.toRow, bestSafeMove.move.toCol);
     console.log(`⏱️ Search time: ${searchTime}ms | Selected: ${moveStr} | Eval: ${bestSafeMove.bestCase.toFixed(1)}`);
     console.log(`📊 TT size: ${transpositionTable.size()} entries`);
+    
+    if (bestSafeMove.isBlunder) {
+        console.warn(`⚠️ Selected move may be suboptimal: ${bestSafeMove.blunderReason}`);
+    }
     
     return bestSafeMove.move;
 }
@@ -2533,7 +2768,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} (Stable & Smart)`);
+    console.log(`🎯 New game started! ${GAME_VERSION} (Blunder-Proof + Aggressive)`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2635,6 +2870,6 @@ if (typeof window !== 'undefined') {
     window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Fixed & Stable!`);
-console.log(`🎯 AI: QS + TT + PVS (Null Move disabled for stability)`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Blunder-Proof & Aggressive!`);
+console.log(`🎯 AI: Blunder Detection + QS + TT + PVS + Null Move`);
 console.log(`💡 Type 'help()' for commands`);

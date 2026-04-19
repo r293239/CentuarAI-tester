@@ -537,7 +537,7 @@
 
         <div class="ai-info" id="ai-info">
             Games Played: <span id="games-played">0</span> | 
-            AI Win Rate: <span id="win-rate">50%</span>
+            AI Win Rate: <span id="win-rate">50%</span> |
         </div>
         
         <div class="sync-status" id="sync-status">Ready</div>
@@ -567,8 +567,10 @@
         </div>
     </div>
 
-    <!-- Load JavaScript files -->
+    <!-- Load ALL JavaScript files in correct order -->
     <script src="chess-ai-database.js"></script>
+    <script src="chess-endgame.js"></script>
+    <script src="chess-game-database.js"></script>
     <script src="chess-game.js"></script>
 
     <script>
@@ -634,6 +636,8 @@
                 console.log('🎯 Welcome to Smart Chess AI! 🤖');
                 console.log('🔥 Enhanced Features:');
                 console.log('   • Professional opening database with 50+ openings');
+                console.log('   • Endgame tablebase knowledge');
+                console.log('   • Pattern learning from master games');
                 console.log('   • Adaptive difficulty that learns from your play style');
                 console.log('   • Advanced position evaluation with piece tables');
                 console.log('   • Enhanced minimax with alpha-beta pruning');
@@ -715,8 +719,14 @@
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🎯 Chess game interface loaded successfully!');
             
-            // Initialize game after a short delay to ensure all scripts are loaded
+            // Check which files loaded
             setTimeout(() => {
+                console.log('📂 Loaded files check:');
+                console.log('   • chess-ai-database.js:', typeof ChessAILearner !== 'undefined' ? '✅' : '❌');
+                console.log('   • chess-endgame.js:', typeof ChessEndgameEngine !== 'undefined' ? '✅' : '❌');
+                console.log('   • chess-game-database.js:', typeof GamePatternLearner !== 'undefined' ? '✅' : '❌');
+                console.log('   • chess-game.js:', typeof newGame !== 'undefined' ? '✅' : '❌');
+                
                 if (typeof newGame === 'function') {
                     console.log('🚀 Game functions loaded successfully!');
                 } else {

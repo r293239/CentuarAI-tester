@@ -1,6 +1,6 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.2 - Stable + Quiescence + Blunder Detection + Depth 4
+// VERSION: 2.4.2 - Quiescence + Blunder Detection + Depth 4
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
 const GAME_VERSION = "2.4.2";
@@ -107,6 +107,24 @@ class PersistentMoveTree {
             console.log(`✂️ Pruned ${toDelete.length} inactive lines`);
         }
         this.saveToStorage();
+    }
+
+    extendLine(currentMoveSequence, newVariations) {
+        const extendedMoves = [];
+        
+        for (const variation of newVariations) {
+            const fullSequence = [...currentMoveSequence, variation.moveKey];
+            extendedMoves.push({
+                moveKey: variation.moveKey,
+                fullSequence,
+                evaluation: variation.evaluation
+            });
+        }
+        
+        if (extendedMoves.length > 0) {
+            console.log(`🔍 Extended current line by ${extendedMoves.length} new variations`);
+        }
+        return extendedMoves;
     }
 
     saveToStorage() {
@@ -359,7 +377,7 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== QUIESCENCE SEARCH (NEW in v2.4.2) ==========
+// ========== NEW: QUIESCENCE SEARCH ==========
 function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
     let standPat = evaluatePositionForSearch(boardState, player, moveCount);
     if (!isFinite(standPat)) standPat = 0;
@@ -422,7 +440,7 @@ function getCapturesAndPromotions(boardState, player) {
     return moves;
 }
 
-// ========== BLUNDER DETECTION (NEW in v2.4.2) ==========
+// ========== NEW: BLUNDER DETECTION ==========
 function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
     const piece = boardState[fromRow]?.[fromCol];
     const pieceValue = PIECE_VALUES[piece] || 0;
@@ -1995,7 +2013,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
     // Apply endgame check penalty
     evaluation += getEndgameCheckPenalty(boardState, player, moveHistory);
     
-    // Add checkmate pattern bonus (only for the player to move)
+    // Add checkmate pattern bonus
     const mateBonus = evaluateCheckmatePatterns(boardState, player);
     evaluation += mateBonus;
     
@@ -2006,7 +2024,7 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
 
 const SEARCH_CONFIG = {
     baseDepth: 4,  // Increased from 3 to 4
-    endgameDepth: 6,  // Increased from 5 to 6
+    endgameDepth: 6,
     useMemory: true,
     riskAssessment: true,
     useQuiescence: true  // New in v2.4.2
@@ -2462,4 +2480,4 @@ if (typeof window !== 'undefined') {
 
 console.log(`✅ Chess Game v${GAME_VERSION} loaded - Quiescence + Blunder Detection + Depth 4!`);
 console.log(`🎯 AI now searches deeper and avoids hanging pieces!`);
-console.log(`💡 Type 'help()' for all commands, 'analyzeMove(\"e4d5\")' for move analysis!`);
+console.log(`💡 Type 'help()' for all commands, 'analyzeMove("e4d5")' for move analysis!`);

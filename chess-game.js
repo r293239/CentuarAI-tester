@@ -1,6 +1,6 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.2 - Quiescence + Blunder Detection + Depth 4
+// VERSION: 2.4.2 - Quiescence + Blunder Detection + Depth 4 + Move Ordering + Futility Pruning
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
 const GAME_VERSION = "2.4.2";
@@ -107,24 +107,6 @@ class PersistentMoveTree {
             console.log(`✂️ Pruned ${toDelete.length} inactive lines`);
         }
         this.saveToStorage();
-    }
-
-    extendLine(currentMoveSequence, newVariations) {
-        const extendedMoves = [];
-        
-        for (const variation of newVariations) {
-            const fullSequence = [...currentMoveSequence, variation.moveKey];
-            extendedMoves.push({
-                moveKey: variation.moveKey,
-                fullSequence,
-                evaluation: variation.evaluation
-            });
-        }
-        
-        if (extendedMoves.length > 0) {
-            console.log(`🔍 Extended current line by ${extendedMoves.length} new variations`);
-        }
-        return extendedMoves;
     }
 
     saveToStorage() {
@@ -377,7 +359,125 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== NEW: QUIESCENCE SEARCH ==========
+// ========== MOVE ORDERING & PRUNING (v2.4.2 Speed Improvements) ==========
+
+// Killer moves: [depth][0] = primary killer, [depth][1] = secondary killer
+let killerMoves = [
+    [null, null], // depth 0
+    [null, null], // depth 1
+    [null, null], // depth 2
+    [null, null], // depth 3
+    [null, null]  // depth 4
+];
+
+// History heuristic table
+let historyTable = new Map();
+const HISTORY_MAX = 10000;
+const FUTILITY_MARGIN = 200;
+
+function storeKillerMove(move, depth) {
+    if (depth >= killerMoves.length) return;
+    
+    const killer1 = killerMoves[depth][0];
+    const killer2 = killerMoves[depth][1];
+    
+    if (killer1 && killer1.fromRow === move.fromRow && killer1.fromCol === move.fromCol &&
+        killer1.toRow === move.toRow && killer1.toCol === move.toCol) return;
+    if (killer2 && killer2.fromRow === move.fromRow && killer2.fromCol === move.fromCol &&
+        killer2.toRow === move.toRow && killer2.toCol === move.toCol) return;
+    
+    killerMoves[depth][1] = killerMoves[depth][0];
+    killerMoves[depth][0] = { ...move };
+}
+
+function getKillerScore(move, depth) {
+    if (depth >= killerMoves.length) return 0;
+    
+    const killer1 = killerMoves[depth][0];
+    const killer2 = killerMoves[depth][1];
+    
+    if (killer1 && killer1.fromRow === move.fromRow && killer1.fromCol === move.fromCol &&
+        killer1.toRow === move.toRow && killer1.toCol === move.toCol) return 2;
+    if (killer2 && killer2.fromRow === move.fromRow && killer2.fromCol === move.fromCol &&
+        killer2.toRow === move.toRow && killer2.toCol === move.toCol) return 1;
+    return 0;
+}
+
+function updateHistory(move, depth) {
+    const key = `${move.fromRow},${move.fromCol},${move.toRow},${move.toCol}`;
+    const current = historyTable.get(key) || 0;
+    historyTable.set(key, Math.min(current + depth * depth, HISTORY_MAX));
+}
+
+function getHistoryScore(move) {
+    const key = `${move.fromRow},${move.fromCol},${move.toRow},${move.toCol}`;
+    return historyTable.get(key) || 0;
+}
+
+function orderMoves(moves, boardState, player, depth) {
+    const scoredMoves = moves.map(move => {
+        let score = 0;
+        
+        const victim = boardState[move.toRow]?.[move.toCol];
+        const attacker = boardState[move.fromRow]?.[move.fromCol];
+        
+        // MVV-LVA for captures
+        if (victim) {
+            const victimValue = PIECE_VALUES[victim] || 0;
+            const attackerValue = PIECE_VALUES[attacker] || 0;
+            score += victimValue * 100 - attackerValue;
+        }
+        
+        // Killer moves
+        score += getKillerScore(move, depth) * 10000;
+        
+        // History heuristic
+        score += getHistoryScore(move) / 100;
+        
+        // Promotions are very good
+        if ((attacker === '♙' && move.toRow === 0) || (attacker === '♟' && move.toRow === 7)) {
+            score += 50000;
+        }
+        
+        return { move, score };
+    });
+    
+    return scoredMoves.sort((a, b) => b.score - a.score).map(item => item.move);
+}
+
+function isFutile(boardState, move, alpha, player, depth) {
+    // Only prune at depth 1-2
+    if (depth > 2) return false;
+    
+    // Don't prune captures, checks, or promotions
+    const target = boardState[move.toRow]?.[move.toCol];
+    if (target) return false;
+    
+    const piece = boardState[move.fromRow]?.[move.fromCol];
+    if ((piece === '♙' && move.toRow === 0) || (piece === '♟' && move.toRow === 7)) return false;
+    
+    // Quick material estimate
+    let material = 0;
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const p = boardState[r]?.[c];
+            if (p) {
+                const val = PIECE_VALUES[p] || 0;
+                material += isPlayerPieceForPosition(p, 'white') ? val : -val;
+            }
+        }
+    }
+    
+    // If we're way below alpha, skip
+    const maxGain = 200;
+    if (player === 'white') {
+        return material + maxGain < alpha - FUTILITY_MARGIN;
+    } else {
+        return -material + maxGain < alpha - FUTILITY_MARGIN;
+    }
+}
+
+// ========== QUIESCENCE SEARCH ==========
 function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
     let standPat = evaluatePositionForSearch(boardState, player, moveCount);
     if (!isFinite(standPat)) standPat = 0;
@@ -406,7 +506,10 @@ function quiescenceSearch(boardState, alpha, beta, player, maxDepth = 6) {
         
         if (!isFinite(score)) continue;
         
-        if (score >= beta) return beta;
+        if (score >= beta) {
+            storeKillerMove(move, 0);
+            return beta;
+        }
         if (score > alpha) alpha = score;
     }
     
@@ -440,7 +543,7 @@ function getCapturesAndPromotions(boardState, player) {
     return moves;
 }
 
-// ========== NEW: BLUNDER DETECTION ==========
+// ========== BLUNDER DETECTION ==========
 function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
     const piece = boardState[fromRow]?.[fromCol];
     const pieceValue = PIECE_VALUES[piece] || 0;
@@ -449,7 +552,6 @@ function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
     const newBoard = makeTestMoveForPosition(boardState, fromRow, fromCol, toRow, toCol);
     if (!newBoard) return { isBlunder: true, penalty: 500 };
     
-    // Check if moved piece can be captured
     const movedPiece = newBoard[toRow]?.[toCol];
     if (movedPiece && pieceValue >= 300) {
         const attacked = isSquareAttackedForPosition(newBoard, toRow, toCol, opponent);
@@ -471,7 +573,6 @@ function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
         }
     }
     
-    // Check if we hung another piece
     for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
             const p = newBoard[r]?.[c];
@@ -542,11 +643,8 @@ function getEndgameCheckPenalty(boardState, player, moveHistory) {
         }
     }
     
-    if (recentChecks >= 4) {
-        return -150;
-    } else if (recentChecks >= 3) {
-        return -80;
-    }
+    if (recentChecks >= 4) return -150;
+    if (recentChecks >= 3) return -80;
     
     return 0;
 }
@@ -959,7 +1057,7 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (Quiescence + Blunder Detection + Depth 4)`);
+    console.log(`Version: ${GAME_VERSION} (QS+BD+MO+FP)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
@@ -986,8 +1084,6 @@ window.stats = function() {
         console.log(`White wins: ${pStats.whiteWins} (${(pStats.whiteWins/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Black wins: ${pStats.blackWins} (${(pStats.blackWins/pStats.totalGames*100).toFixed(1)}%)`);
         console.log(`Draws: ${pStats.draws} (${(pStats.draws/pStats.totalGames*100).toFixed(1)}%)`);
-        console.log(`Avg moves/game: ${pStats.avgMoves}`);
-        console.log(`Patterns learned: ${pStats.tacticalPatterns}`);
     }
     
     return "Stats displayed above";
@@ -1046,21 +1142,13 @@ window.analyzeMove = function(moveStr) {
     const checkmateScore = evaluateCheckmatePatterns(boardState, currentPlayer);
     console.log(`  Checkmate potential: ${checkmateScore}`);
     
-    if (patternLearner && patternLearner.loaded) {
-        const advice = patternLearner.getTacticalAdvice(boardState, currentPlayer);
-        if (advice && advice.length) {
-            console.log(`\n  📚 Pattern DB Advice:`);
-            advice.forEach(a => console.log(`    • ${a}`));
-        }
-    }
-    
     return { wouldHang, checkmateScore, blunder: blunder.isBlunder };
 };
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
     console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.2                ║");
-    console.log("║    (Quiescence Search + Blunder Detection + Depth 4)           ║");
+    console.log("║   (QS + Blunder Detection + Move Ordering + Futility Pruning)  ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -1077,18 +1165,18 @@ window.help = function() {
     console.log("  setMode('ai/player') - Switch game mode");
     console.log("  switchSide()       - Switch sides");
     console.log("\n🎯 ANALYSIS:");
-    console.log("  analyzeMove('e4d5') - Analyze move quality (incl. blunder detection)");
+    console.log("  analyzeMove('e4d5') - Analyze move quality");
     console.log("\n📊 GAME INFO:");
     console.log("  stats()            - Show game statistics");
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory");
     console.log("  help()             - Show this help");
     console.log("\n🆕 v2.4.2 Features:");
-    console.log("  • Quiescence Search (prevents horizon effect)");
-    console.log("  • Blunder Detection (penalizes hanging pieces)");
-    console.log("  • Base Depth 4 (deeper search)");
-    console.log("  • Checkmate pattern recognition");
-    console.log("  • Anti-endless check prevention");
+    console.log("  • Quiescence Search");
+    console.log("  • Blunder Detection");
+    console.log("  • Depth 4 Search");
+    console.log("  • Move Ordering (MVV-LVA + Killer + History)");
+    console.log("  • Futility Pruning");
     console.log("\n");
     return "Help displayed above";
 };
@@ -1158,7 +1246,7 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - Quiescence + Blunder Detection + Depth 4`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - QS+BD+MO+FP`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`📚 Pattern DB: ${patternLearner && patternLearner.loaded ? 'Loaded' : 'Not loaded'}`);
 
@@ -2023,11 +2111,11 @@ function evaluatePositionForSearch(boardState, player, moveNumber) {
 // ========== MINIMAX WITH RISK ASSESSMENT ==========
 
 const SEARCH_CONFIG = {
-    baseDepth: 4,  // Increased from 3 to 4
+    baseDepth: 4,
     endgameDepth: 6,
     useMemory: true,
     riskAssessment: true,
-    useQuiescence: true  // New in v2.4.2
+    useQuiescence: true
 };
 
 let transpositionTable = new Map();
@@ -2035,7 +2123,7 @@ let transpositionTable = new Map();
 function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, player, moveNumber, trackWorstCase = false) {
     if (!boardState) return 0;
     
-    // Use quiescence search at leaf nodes (NEW in v2.4.2)
+    // Use quiescence search at leaf nodes
     if (depth === 0) {
         if (SEARCH_CONFIG.useQuiescence) {
             return quiescenceSearch(boardState, alpha, beta, player);
@@ -2052,22 +2140,20 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
-    moves.sort((a, b) => {
-        const targetA = boardState[a.toRow][a.toCol];
-        const targetB = boardState[b.toRow][b.toCol];
-        if (targetA && !targetB) return -1;
-        if (!targetA && targetB) return 1;
-        const valueA = targetA ? PIECE_VALUES[targetA] : 0;
-        const valueB = targetB ? PIECE_VALUES[targetB] : 0;
-        return valueB - valueA;
-    });
+    // Order moves using MVV-LVA, killer, and history
+    const orderedMoves = orderMoves(moves, boardState, player, depth);
 
     if (isMaximizingPlayer) {
         let maxEval = -Infinity;
         let worstCaseEval = Infinity;
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
-        for (const move of moves) {
+        for (const move of orderedMoves) {
+            // Futility pruning
+            if (isFutile(boardState, move, alpha, player, depth)) {
+                continue;
+            }
+            
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
@@ -2088,20 +2174,29 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
                 evalValue -= 80;
             }
             
-            // Apply blunder penalty (NEW in v2.4.2)
             const blunder = detectBlunder(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
             if (blunder.isBlunder) {
                 evalValue -= blunder.penalty;
             }
             
-            maxEval = Math.max(maxEval, evalValue);
+            if (evalValue > maxEval) {
+                maxEval = evalValue;
+            }
+            
+            if (evalValue > alpha) {
+                alpha = evalValue;
+                updateHistory(move, depth);
+            }
+            
             if (trackWorstCase) {
                 const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
                 worstCaseEval = Math.min(worstCaseEval, worstVal);
             }
-            alpha = Math.max(alpha, evalValue);
             
-            if (beta <= alpha) break;
+            if (alpha >= beta) {
+                storeKillerMove(move, depth);
+                break;
+            }
         }
         
         return trackWorstCase ? { best: maxEval, worst: worstCaseEval } : maxEval;
@@ -2110,7 +2205,12 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         let worstCaseEval = -Infinity;
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
-        for (const move of moves) {
+        for (const move of orderedMoves) {
+            // Futility pruning
+            if (isFutile(boardState, move, beta, player, depth)) {
+                continue;
+            }
+            
             const targetPiece = boardState[move.toRow][move.toCol];
             if (targetPiece) {
                 const captureSafety = evaluateCaptureSafety(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
@@ -2131,20 +2231,29 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
                 evalValue += 80;
             }
             
-            // Apply blunder penalty (NEW in v2.4.2)
             const blunder = detectBlunder(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, player);
             if (blunder.isBlunder) {
                 evalValue += blunder.penalty;
             }
             
-            minEval = Math.min(minEval, evalValue);
+            if (evalValue < minEval) {
+                minEval = evalValue;
+            }
+            
+            if (evalValue < beta) {
+                beta = evalValue;
+                updateHistory(move, depth);
+            }
+            
             if (trackWorstCase) {
                 const worstVal = typeof evaluation === 'object' ? evaluation.worst : evaluation;
                 worstCaseEval = Math.max(worstCaseEval, worstVal);
             }
-            beta = Math.min(beta, evalValue);
             
-            if (beta <= alpha) break;
+            if (beta <= alpha) {
+                storeKillerMove(move, depth);
+                break;
+            }
         }
         
         return trackWorstCase ? { best: minEval, worst: worstCaseEval } : minEval;
@@ -2175,7 +2284,10 @@ function findBestMoveWithRiskAssessment() {
     
     const evaluatedMoves = [];
     
-    for (const move of allMoves) {
+    // Order root moves
+    const orderedRootMoves = orderMoves(allMoves, board, currentPlayer, searchDepth);
+    
+    for (const move of orderedRootMoves) {
         // Skip endless check moves in endgame
         if (isEndgame) {
             const testHistory = [...moveHistory, toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)];
@@ -2219,7 +2331,6 @@ function findBestMoveWithRiskAssessment() {
                 bestCase -= 80;
             }
             
-            // Apply blunder penalty (NEW in v2.4.2)
             const blunder = detectBlunder(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
             if (blunder.isBlunder) {
                 bestCase -= blunder.penalty;
@@ -2321,7 +2432,7 @@ function updateAIStats() {
     winRateElement.textContent = winRate;
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.4.2 (QS+BD)`;
+        difficultyElement.textContent = `PMTS v2.4.2 (QS+BD+MO+FP)`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2362,6 +2473,10 @@ function newGame() {
     if (moveTree) {
         moveTree.activeLineMoves = [];
     }
+    
+    // Reset search heuristics
+    killerMoves = [[null, null], [null, null], [null, null], [null, null], [null, null]];
+    historyTable.clear();
 
     createBoard();
     updateStatus();
@@ -2378,7 +2493,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Quiescence + Blunder Detection!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} with Move Ordering + Futility Pruning!`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2434,7 +2549,7 @@ function changeGameMode() {
     gameMode = gameModeSelect.value;
 
     if (gameMode === 'ai') {
-        gameModeDisplay.textContent = 'vs AI (v2.4.2)';
+        gameModeDisplay.textContent = `vs AI (v${GAME_VERSION})`;
         if (aiInfo) aiInfo.style.display = 'block';
 
         if (currentPlayer === aiPlayer && !gameOver) {
@@ -2452,6 +2567,8 @@ function clearMemory() {
             moveTree.clear();
         }
         transpositionTable.clear();
+        killerMoves = [[null, null], [null, null], [null, null], [null, null], [null, null]];
+        historyTable.clear();
         console.log("🧹 Memory cleared!");
         updateAIStats();
         alert('AI memory cleared!');
@@ -2478,6 +2595,6 @@ if (typeof window !== 'undefined') {
     window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - Quiescence + Blunder Detection + Depth 4!`);
-console.log(`🎯 AI now searches deeper and avoids hanging pieces!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - QS + BD + Move Ordering + Futility Pruning!`);
+console.log(`🎯 AI now searches faster and smarter!`);
 console.log(`💡 Type 'help()' for all commands, 'analyzeMove("e4d5")' for move analysis!`);

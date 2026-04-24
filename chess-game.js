@@ -1,9 +1,9 @@
 // chess-game.js
 // Enhanced chess game with Persistent Memory Tree Search (PMTS) and Risk Assessment
-// VERSION: 2.4.2 - Quiescence + Blunder Detection + Depth 4 + Move Ordering + Futility Pruning
+// VERSION: 2.4.3 - Blunder Skip + Penalty Increase
 // COMPATIBLE WITH: chess-ai-database.js (v2.0) and chess-game-database.js (v1.1)
 
-const GAME_VERSION = "2.4.2";
+const GAME_VERSION = "2.4.3";
 
 // ========== GAME DATABASES ==========
 let openingBook = null;        // From chess-ai-database.js (opening moves)
@@ -128,7 +128,7 @@ class PersistentMoveTree {
             const saved = localStorage.getItem('chess_persistent_tree');
             if (saved) {
                 const data = JSON.parse(saved);
-                if (data.version === GAME_VERSION || data.version === "2.4.1") {
+                if (data.version === GAME_VERSION || data.version === "2.4.1" || data.version === "2.4.2") {
                     this.tree = new Map(data.tree);
                     this.positionCache = new Map(data.positionCache);
                     console.log(`📀 Loaded ${this.tree.size} moves from persistent memory`);
@@ -359,18 +359,16 @@ const ENDGAME_PIECE_SQUARE_TABLES = {
     ]
 };
 
-// ========== MOVE ORDERING & PRUNING (v2.4.2 Speed Improvements) ==========
+// ========== MOVE ORDERING & PRUNING ==========
 
-// Killer moves: [depth][0] = primary killer, [depth][1] = secondary killer
 let killerMoves = [
-    [null, null], // depth 0
-    [null, null], // depth 1
-    [null, null], // depth 2
-    [null, null], // depth 3
-    [null, null]  // depth 4
+    [null, null],
+    [null, null],
+    [null, null],
+    [null, null],
+    [null, null]
 ];
 
-// History heuristic table
 let historyTable = new Map();
 const HISTORY_MAX = 10000;
 const FUTILITY_MARGIN = 200;
@@ -421,20 +419,15 @@ function orderMoves(moves, boardState, player, depth) {
         const victim = boardState[move.toRow]?.[move.toCol];
         const attacker = boardState[move.fromRow]?.[move.fromCol];
         
-        // MVV-LVA for captures
         if (victim) {
             const victimValue = PIECE_VALUES[victim] || 0;
             const attackerValue = PIECE_VALUES[attacker] || 0;
             score += victimValue * 100 - attackerValue;
         }
         
-        // Killer moves
         score += getKillerScore(move, depth) * 10000;
-        
-        // History heuristic
         score += getHistoryScore(move) / 100;
         
-        // Promotions are very good
         if ((attacker === '♙' && move.toRow === 0) || (attacker === '♟' && move.toRow === 7)) {
             score += 50000;
         }
@@ -446,17 +439,14 @@ function orderMoves(moves, boardState, player, depth) {
 }
 
 function isFutile(boardState, move, alpha, player, depth) {
-    // Only prune at depth 1-2
     if (depth > 2) return false;
     
-    // Don't prune captures, checks, or promotions
     const target = boardState[move.toRow]?.[move.toCol];
     if (target) return false;
     
     const piece = boardState[move.fromRow]?.[move.fromCol];
     if ((piece === '♙' && move.toRow === 0) || (piece === '♟' && move.toRow === 7)) return false;
     
-    // Quick material estimate
     let material = 0;
     for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
@@ -468,7 +458,6 @@ function isFutile(boardState, move, alpha, player, depth) {
         }
     }
     
-    // If we're way below alpha, skip
     const maxGain = 200;
     if (player === 'white') {
         return material + maxGain < alpha - FUTILITY_MARGIN;
@@ -543,7 +532,7 @@ function getCapturesAndPromotions(boardState, player) {
     return moves;
 }
 
-// ========== BLUNDER DETECTION ==========
+// ========== BLUNDER DETECTION (INCREASED PENALTY) ==========
 function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
     const piece = boardState[fromRow]?.[fromCol];
     const pieceValue = PIECE_VALUES[piece] || 0;
@@ -568,7 +557,7 @@ function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
                 }
             }
             if (!defended) {
-                return { isBlunder: true, penalty: pieceValue * 2 };
+                return { isBlunder: true, penalty: pieceValue * 5 };  // INCREASED from *2 to *5
             }
         }
     }
@@ -593,7 +582,7 @@ function detectBlunder(boardState, fromRow, fromCol, toRow, toCol, player) {
                             }
                         }
                         if (!defended) {
-                            return { isBlunder: true, penalty: val * 2 };
+                            return { isBlunder: true, penalty: val * 5 };  // INCREASED
                         }
                     }
                 }
@@ -1057,7 +1046,7 @@ window.switchSide = function() {
 
 window.stats = function() {
     console.log("\n=== GAME STATISTICS ===");
-    console.log(`Version: ${GAME_VERSION} (QS+BD+MO+FP)`);
+    console.log(`Version: ${GAME_VERSION} (Blunder Skip)`);
     console.log(`Mode: ${gameMode === 'ai' ? 'vs AI' : 'vs Player'}`);
     console.log(`Current player: ${currentPlayer}`);
     console.log(`Move number: ${moveCount}`);
@@ -1126,7 +1115,7 @@ window.analyzeMove = function(moveStr) {
     
     const blunder = detectBlunder(boardState, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
     if (blunder.isBlunder) {
-        console.log(`  ⚠️ BLUNDER DETECTED! Penalty: ${blunder.penalty}`);
+        console.log(`  🚫 BLUNDER! Penalty: ${blunder.penalty} - This move would be skipped!`);
     } else {
         console.log(`  ✅ Safe move`);
     }
@@ -1147,8 +1136,8 @@ window.analyzeMove = function(moveStr) {
 
 window.help = function() {
     console.log("\n╔═══════════════════════════════════════════════════════════════╗");
-    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.2                ║");
-    console.log("║   (QS + Blunder Detection + Move Ordering + Futility Pruning)  ║");
+    console.log("║              CHESS GAME CONSOLE COMMANDS v2.4.3                ║");
+    console.log("║         (Blunder Skip + Penalty Increase)                     ║");
     console.log("╚═══════════════════════════════════════════════════════════════╝");
     console.log("\n📌 BOARD & POSITION:");
     console.log("  board()            - Show current board");
@@ -1171,12 +1160,9 @@ window.help = function() {
     console.log("  newGame()          - Start new game");
     console.log("  clearMemory()      - Clear AI memory");
     console.log("  help()             - Show this help");
-    console.log("\n🆕 v2.4.2 Features:");
-    console.log("  • Quiescence Search");
-    console.log("  • Blunder Detection");
-    console.log("  • Depth 4 Search");
-    console.log("  • Move Ordering (MVV-LVA + Killer + History)");
-    console.log("  • Futility Pruning");
+    console.log("\n🆕 v2.4.3 Fixes:");
+    console.log("  • Blunder penalty increased 2.5x");
+    console.log("  • Blunder moves SKIPPED entirely at root");
     console.log("\n");
     return "Help displayed above";
 };
@@ -1246,7 +1232,7 @@ let riskAssessor = new RiskAssessment();
 
 function displayVersion() {
     const stats = moveTree ? moveTree.getStats() : { totalMoves: 0, cachedPositions: 0 };
-    console.log(`♔ Chess Game v${GAME_VERSION} - QS+BD+MO+FP`);
+    console.log(`♔ Chess Game v${GAME_VERSION} - Blunder Skip + Penalty Increase`);
     console.log(`📦 Memory: ${stats.totalMoves} cached moves`);
     console.log(`📚 Pattern DB: ${patternLearner && patternLearner.loaded ? 'Loaded' : 'Not loaded'}`);
 
@@ -2140,7 +2126,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         return 0;
     }
 
-    // Order moves using MVV-LVA, killer, and history
     const orderedMoves = orderMoves(moves, boardState, player, depth);
 
     if (isMaximizingPlayer) {
@@ -2149,7 +2134,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of orderedMoves) {
-            // Futility pruning
             if (isFutile(boardState, move, alpha, player, depth)) {
                 continue;
             }
@@ -2206,7 +2190,6 @@ function minimaxWithRisk(boardState, depth, alpha, beta, isMaximizingPlayer, pla
         const nextPlayer = player === 'white' ? 'black' : 'white';
 
         for (const move of orderedMoves) {
-            // Futility pruning
             if (isFutile(boardState, move, beta, player, depth)) {
                 continue;
             }
@@ -2288,9 +2271,18 @@ function findBestMoveWithRiskAssessment() {
     const orderedRootMoves = orderMoves(allMoves, board, currentPlayer, searchDepth);
     
     for (const move of orderedRootMoves) {
+        const moveStr = toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
+        
+        // NEW: Skip obvious blunders at root (penalty >= 600 = hanging piece worth >= 300)
+        const blunder = detectBlunder(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
+        if (blunder.isBlunder && blunder.penalty >= 600) {
+            console.log(`  🚫 Skipping blunder: ${moveStr} (penalty: ${blunder.penalty})`);
+            continue;
+        }
+        
         // Skip endless check moves in endgame
         if (isEndgame) {
-            const testHistory = [...moveHistory, toAlgebraicMove(move.fromRow, move.fromCol, move.toRow, move.toCol)];
+            const testHistory = [...moveHistory, moveStr];
             if (isEndlessCheck(testHistory, currentPlayer)) {
                 console.log(`  ⏭️ Skipping endless check move`);
                 continue;
@@ -2329,12 +2321,6 @@ function findBestMoveWithRiskAssessment() {
             
             if (wouldHangPiece(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer)) {
                 bestCase -= 80;
-            }
-            
-            const blunder = detectBlunder(board, move.fromRow, move.fromCol, move.toRow, move.toCol, currentPlayer);
-            if (blunder.isBlunder) {
-                bestCase -= blunder.penalty;
-                console.log(`  ⚠️ Blunder detected: -${blunder.penalty}`);
             }
             
             evaluatedMoves.push({
@@ -2432,7 +2418,7 @@ function updateAIStats() {
     winRateElement.textContent = winRate;
     
     if (difficultyElement) {
-        difficultyElement.textContent = `PMTS v2.4.2 (QS+BD+MO+FP)`;
+        difficultyElement.textContent = `PMTS v2.4.3 (Blunder Skip)`;
     }
     if (versionElement) {
         versionElement.textContent = `v${GAME_VERSION}`;
@@ -2493,7 +2479,7 @@ function newGame() {
         syncStatusElement.classList.remove('thinking');
     }
 
-    console.log(`🎯 New game started! ${GAME_VERSION} with Move Ordering + Futility Pruning!`);
+    console.log(`🎯 New game started! ${GAME_VERSION} - Blunders are SKIPPED!`);
     
     if (gameMode === 'ai' && humanPlayer === 'black' && currentPlayer === 'white') {
         setTimeout(makeAIMove, 500);
@@ -2595,6 +2581,6 @@ if (typeof window !== 'undefined') {
     window.analyzeMove = window.analyzeMove;
 }
 
-console.log(`✅ Chess Game v${GAME_VERSION} loaded - QS + BD + Move Ordering + Futility Pruning!`);
-console.log(`🎯 AI now searches faster and smarter!`);
+console.log(`✅ Chess Game v${GAME_VERSION} loaded - Blunder Skip + Penalty Increase!`);
+console.log(`🎯 AI now SKIPS moves that hang pieces!`);
 console.log(`💡 Type 'help()' for all commands, 'analyzeMove("e4d5")' for move analysis!`);
